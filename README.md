@@ -209,6 +209,8 @@ docker compose exec postgres pg_dump -U uptimeforge -Fc uptimeforge > uptimeforg
 
 Back up before upgrading: going back to an older version is not supported. The `hub-data` volume only holds caches.
 
+The hub follows `latest`. To pin a release or try a release candidate, put it in `.env` (`UF_VERSION=0.2.0-rc1`) and run the same two commands; remove the line to follow `latest` again. Agents installed by 0.2.0 or later update from the hub by themselves (signed, in stages); older ones the hub lists for a reinstall.
+
 ## ⚙️ Configuration
 
 Everything is configurable in the UI. Prefer git? Start the hub with `UF_CONFIG=/path/config.yaml`: probes, checks and settings from the file appear in the UI read-only. See [`config.example.yaml`](config.example.yaml).
