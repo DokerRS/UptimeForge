@@ -1,18 +1,18 @@
 import { Badge, Box, Card, CloseButton, Group, SegmentedControl, Text, Tooltip, UnstyledButton } from '@mantine/core';
 import { IconZoomIn } from '@tabler/icons-react';
 import { useMemo, useState, type ReactNode } from 'react';
-import { useT } from '../i18n';
-import { Chart, LIVE_RANGE, RANGES, seriesStats, timeOption, type LineSeries, type Pal } from './Chart';
+import { useLang, useT } from '../i18n';
+import { Chart, LIVE_RANGE, RANGES, seriesStats, timeOption, useChartStyle, type LineSeries, type Pal } from './Chart';
 
 const L = {
   ru: {
     last: 'сейчас', min: 'мин', avg: 'сред', max: 'макс', no_data: 'Нет данных за этот период',
-    zoomed: 'Окно', reset: 'Сбросить', hint: 'Выделите участок графика мышью, чтобы приблизить', hide: 'Скрыть или показать',
+    zoomed: 'Окно', reset: 'Сбросить', hint: 'Выделите участок графика мышью, чтобы приблизить; двойной клик — назад', hide: 'Скрыть или показать',
     m1: '1 мин', h1: '1ч', h6: '6ч', h24: '24ч', d7: '7д', d30: '30д', m1_hint: 'Последняя минута в реальном времени, точка в секунду',
   },
   en: {
     last: 'last', min: 'min', avg: 'avg', max: 'max', no_data: 'No data for this period',
-    zoomed: 'Window', reset: 'Reset', hint: 'Drag across a chart to zoom in', hide: 'Hide or show',
+    zoomed: 'Window', reset: 'Reset', hint: 'Drag across a chart to zoom in; double-click to go back', hide: 'Hide or show',
     m1: '1 min', h1: '1h', h6: '6h', h24: '24h', d7: '7d', d30: '30d', m1_hint: 'The last minute in real time, a point a second',
   },
 };
@@ -61,18 +61,22 @@ export function WindowControl({ range, setRange, zoom, reset, extra, ranges = RA
  * the series, and the stats follow what is visible.
  */
 export function MetricCard({
-  title, sub, series, pal, format, axisFormat, from, to, group, onZoom, min = 0, max, interval, lines, marks, height = 200, right, empty,
+  title, sub, series, pal, format, axisFormat, from, to, group, onZoom, onReset, sampling, min = 0, max, interval, lines, marks, height, right, empty,
 }: {
   title: ReactNode; sub?: ReactNode; series: LineSeries[]; pal: Pal; format: (v: number) => string; axisFormat?: (v: number) => string;
-  from: number; to: number; group?: string; onZoom?: (from: number, to: number) => void; min?: number;
+  from: number; to: number; group?: string; onZoom?: (from: number, to: number) => void; onReset?: () => void; sampling?: 'average' | 'max'; min?: number;
   max?: number | ((v: { max: number }) => number); interval?: number; marks?: { from: number; to: number; color: string; label: string }[]; lines?: { value: number; label: string }[]; height?: number; right?: ReactNode; empty?: boolean;
 }) {
   const t = useT(L);
+  const style = useChartStyle();
+  const { lang } = useLang();
+  // The grid styles read better a little taller; callers that set a height keep it.
+  const h = height ?? (style === 'smooth' ? 200 : 240);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const shown = useMemo(() => series.filter((s) => !hidden.has(s.name)), [series, hidden]);
   const option = useMemo(
-    () => timeOption({ series: shown, pal, format, axisFormat, from, to, min, max, interval, lines, marks, legend: false, zoom: !!onZoom }),
-    [shown, pal, format, axisFormat, from, to, min, max, interval, lines, marks, onZoom],
+    () => timeOption({ series: shown, pal, format, axisFormat, from, to, min, max, interval, lines, marks, legend: false, zoom: !!onZoom, style, lang, sampling }),
+    [shown, pal, format, axisFormat, from, to, min, max, interval, lines, marks, onZoom, style, lang, sampling],
   );
   const stats = useMemo(() => series.map((s) => ({ s, st: seriesStats(s) })), [series]);
   const hasData = stats.some((x) => x.st.last != null);
@@ -94,10 +98,10 @@ export function MetricCard({
         {right}
       </Group>
       {empty || !hasData ? (
-        <Box h={height} style={{ display: 'grid', placeItems: 'center' }}><Text size="sm" c="dimmed">{t('no_data')}</Text></Box>
+        <Box h={h} style={{ display: 'grid', placeItems: 'center' }}><Text size="sm" c="dimmed">{t('no_data')}</Text></Box>
       ) : (
         <>
-          <Chart option={option} height={height} group={group} onZoom={onZoom} />
+          <Chart option={option} height={h} group={group} onZoom={onZoom} onReset={onReset} />
           <Box className="uf-legend" mt={6}>
             <div className="uf-legend-head">
               <span />

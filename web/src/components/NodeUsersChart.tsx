@@ -43,7 +43,7 @@ export function NodeUsersChart({ nodes }: { nodes: RemnawaveNode[] }) {
         <MetricCard
           title={t('title')} sub={`${t('sub')} · ${t('top', series.length)}`} series={series} pal={pal} height={280}
           format={(v) => num(Math.round(v))} from={q.data.from * 1000} to={q.data.to * 1000}
-          group="rw-users" onZoom={w.onZoom}
+          group="rw-users" onZoom={w.onZoom} onReset={w.reset}
         />
       )}
     </Section>

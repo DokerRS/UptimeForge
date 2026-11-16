@@ -13,10 +13,19 @@ export interface Prefs {
   font?: string; // interface font id (fonts.ts)
   numFont?: string; // numbers font id: "ui" or a monospace one
   bar?: BarStyle; // how usage bars are drawn in the systems table
+  chart?: ChartStyle; // how time series are drawn; unset is zabbix
   checks?: { groupBy?: 'group' | 'type' | 'status' | 'country' | 'tag'; collapsed?: string[]; view?: 'list' | 'tiles' };
 }
 
-export type BarStyle = 'pill' | 'line' | 'thin' | 'segments' | 'gradient' | 'ring' | 'none';
+/**
+ * ChartStyle: zabbix draws straight segments over a full grid with the main
+ * series filled; smooth is curved lines with a light wash; mirror is zabbix
+ * with the outgoing half of an in/out pair drawn below zero.
+ */
+export type ChartStyle = 'zabbix' | 'smooth' | 'mirror';
+export const CHART_STYLES: ChartStyle[] = ['zabbix', 'smooth', 'mirror'];
+
+export type BarStyle ='pill' | 'line' | 'thin' | 'segments' | 'gradient' | 'ring' | 'none';
 
 const LOCAL = 'uf-prefs';
 
