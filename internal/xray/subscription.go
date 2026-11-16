@@ -2,7 +2,10 @@ package xray
 
 import (
 	"bytes"
+	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,6 +43,11 @@ func FetchSubscription(ctx context.Context, client *http.Client, url, userAgent 
 	if userAgent != "" {
 		req.Header.Set("User-Agent", userAgent)
 	}
+	// A panel with a device limit (Remnawave HWID) answers a request without
+	// a device id with a single stub host instead of the subscription.
+	req.Header.Set("x-hwid", subscriptionHWID(url))
+	req.Header.Set("x-device-os", "Linux")
+	req.Header.Set("x-device-model", "UptimeForge")
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, withoutURL(err)
@@ -53,6 +61,15 @@ func FetchSubscription(ctx context.Context, client *http.Client, url, userAgent 
 		return nil, err
 	}
 	return DecodeSubscription(body)
+}
+
+// subscriptionHWID is the device id the hub fetches a subscription as. It
+// follows from the URL, so every fetch of one subscription (the check, its
+// refreshes, a test run) is one device in the panel, not one per fetch; and
+// it is a hash, so it does not give the URL away.
+func subscriptionHWID(url string) string {
+	sum := sha256.Sum256([]byte("uptimeforge-hwid\x00" + strings.TrimSpace(url)))
+	return "uptimeforge-" + hex.EncodeToString(sum[:8])
 }
 
 // DecodeSubscription accepts a base64 or plain list of share links, or Xray
@@ -106,23 +123,40 @@ func decodeXrayJSON(body []byte) ([]Entry, error) {
 	} else if err := json.Unmarshal(body, &configs); err != nil {
 		return nil, err
 	}
+	// A config is one server, or a balancer over several: every proxy outbound
+	// in it is a server to check. One that several configs share (its own and
+	// a balancer's) is checked once, under the name it came first with.
 	var out []Entry
+	seen := map[string]bool{}
 	for i, c := range configs {
+		remarks, _ := c["remarks"].(string)
+		if remarks == "" {
+			remarks = fmt.Sprintf("config-%d", i+1)
+		}
 		obs, _ := c["outbounds"].([]any)
+		var proxies []map[string]any
 		for _, o := range obs {
 			ob, _ := o.(map[string]any)
 			proto, _ := ob["protocol"].(string)
-			if ob == nil || nonProxyProtocols[proto] {
-				continue
+			if ob != nil && !nonProxyProtocols[proto] {
+				proxies = append(proxies, ob)
 			}
-			name, _ := c["remarks"].(string)
-			if name == "" {
-				name = fmt.Sprintf("config-%d", i+1)
-			}
+		}
+		for _, ob := range proxies {
+			name := remarks
+			tag, _ := ob["tag"].(string)
 			delete(ob, "tag")
 			delete(ob, "mux")
-			out = append(out, Entry{Name: name, Endpoint: outboundEndpoint(ob), Outbound: Outbound(ob)})
-			break
+			key, _ := json.Marshal(ob) // map keys are sorted: equal outbounds, equal keys
+			if seen[string(key)] {
+				continue
+			}
+			seen[string(key)] = true
+			end := outboundEndpoint(ob)
+			if len(proxies) > 1 {
+				name += " · " + cmp.Or(tag, end)
+			}
+			out = append(out, Entry{Name: name, Endpoint: end, Outbound: Outbound(ob)})
 		}
 	}
 	if len(out) == 0 {
