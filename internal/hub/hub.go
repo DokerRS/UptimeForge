@@ -66,6 +66,12 @@ type Hub struct {
 	mutes      map[string]time.Time       // by incident key
 	lastTick   time.Time
 
+	// The hub's own internet (netwatch.go): netWatch says the watch decides
+	// it, net is what it last saw, netWake asks it for a round now.
+	netWatch bool
+	net      hubNet
+	netWake  chan struct{}
+
 	pmu     sync.Mutex
 	pending map[string]chan checks.Result // run-once requests waiting for agents
 
@@ -134,6 +140,9 @@ type pcState struct {
 	at    time.Time
 	fails int
 	down  bool
+	// downAt is when it turned failing: a virtual probe's failure counts
+	// once the hub's internet is confirmed from then on (netwatch.go).
+	downAt time.Time
 }
 
 func New(cfg *Config, log *slog.Logger) (*Hub, error) {
@@ -151,6 +160,7 @@ func New(cfg *Config, log *slog.Logger) (*Hub, error) {
 		downAt:    map[string]time.Time{},
 		mutes:     map[string]time.Time{},
 		pending:   map[string]chan checks.Result{},
+		netWake:   make(chan struct{}, 1),
 		now:       time.Now,
 		version:   version.Version,
 		liveTicker: func(d time.Duration) (<-chan time.Time, func()) {
@@ -364,9 +374,13 @@ func (h *Hub) Run(ctx context.Context) error {
 	}
 	h.rebuild()
 	h.syncSubscriptions()
+	// Watched from the start: until the first answer the hub's own failures
+	// wait and no agent is offline (a hub booting before its line is up).
+	h.netWatch = len(netAddrs(h.cfg.Baseline)) > 0
 	h.mu.Unlock()
 
 	go h.heartbeat(ctx)
+	go h.watchNet(ctx)
 
 	t := time.NewTicker(tickEvery)
 	defer t.Stop()
@@ -408,7 +422,7 @@ func (h *Hub) MarkSeen(ids []string) {
 // offline. Callers hold h.mu.
 func (h *Hub) offlineAfter(p *probe) time.Duration {
 	limit := h.cfg.OfflineGrace.D()
-	if !p.since.After(h.started) {
+	if !p.since.After(h.started) || (!h.net.back.IsZero() && !p.since.After(h.net.back)) {
 		// Not back since the hub started: after a restart every agent
 		// reconnects at once, with backoff, so give them a moment.
 		limit = max(limit, startupGrace)
@@ -424,7 +438,7 @@ func (h *Hub) tick() {
 	for _, id := range h.probeOrder {
 		p := h.probes[id]
 		// A checker is a volunteer's machine: its owner switching it off is no incident.
-		if !p.online && !p.cfg.Checker() && now.Sub(p.since) > h.offlineAfter(p) {
+		if !p.online && !p.cfg.Checker() && h.offlineDue(p, now) {
 			note := "never"
 			if p.hello.Version != "" || h.seen[id] {
 				note = p.since.Format(time.RFC3339)

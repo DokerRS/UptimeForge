@@ -290,7 +290,14 @@ func (h *Hub) Ingest(probeID string, results []checks.Result) {
 			st.fails, st.down = 0, false
 		} else {
 			st.fails++
+			wasDown := st.down
 			st.down = st.fails >= ch.cfg.Retries
+			if st.down && !wasDown {
+				st.downAt = now
+				if h.netWatch && p.cfg.Virtual() {
+					h.wakeNet() // the hub failing may be the hub's own line
+				}
+			}
 		}
 		if ch.cfg.baseline {
 			baseline = true
@@ -326,6 +333,9 @@ func staleAfter(c *CheckConfig) time.Duration {
 // updateProbeHealth flips the probe's "no internet" flag from its baseline
 // checks. Returns true when the flag changed.
 func (h *Hub) updateProbeHealth(p *probe, now time.Time) bool {
+	if h.netWatch && p.cfg.Virtual() {
+		return false // the hub's internet watch decides for the probes it runs (netwatch.go)
+	}
 	fresh, up := 0, 0
 	pending := false
 	var lastErr string
@@ -398,6 +408,12 @@ func (h *Hub) evaluate(ch *check, now time.Time) {
 			}
 			continue
 		}
+		if st.down && h.netWatch && p.cfg.Virtual() && !h.netConfirmed(st.downAt) {
+			// The hub sees it fail; whether that is the check or the hub's
+			// own line, the next internet answer tells. Until then it waits.
+			expected++
+			continue
+		}
 		l := h.probeLine(p, !st.down, st.last.Reason, st.last.Error)
 		l.LatencyMS, l.Bytes = st.last.LatencyMS, st.last.Bytes
 		if l.OK {
@@ -440,7 +456,7 @@ func (h *Hub) awaited(p *probe, ch *check, now time.Time) bool {
 	if p.online {
 		return now.Sub(p.since) <= staleAfter(&ch.cfg)
 	}
-	return h.incidents["probe:"+p.cfg.ID] == nil && now.Sub(p.since) <= h.offlineAfter(p)
+	return h.incidents["probe:"+p.cfg.ID] == nil && !h.offlineDue(p, now)
 }
 
 // silentWitnesses returns the last lines of probes that are on the open

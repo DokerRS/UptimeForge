@@ -254,6 +254,9 @@ func (h *Hub) detach(p *probe, ac *agentConn) {
 	}
 	now := time.Now()
 	p.conn, p.online, p.since = nil, false, now
+	if h.netWatch {
+		h.wakeNet() // agents dropping may be the hub's own line
+	}
 	h.evaluateAll(now)
 	h.rolloutStep(h.now()) // an agent told to update is missing from now
 }

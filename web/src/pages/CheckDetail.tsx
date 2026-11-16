@@ -408,7 +408,7 @@ export default function CheckDetail() {
                 )}
                 {series.isLoading ? <Skeleton h={300} radius="lg" /> : latency && series.data ? (
                   <MetricCard title={t('latency_by_probe')} series={latency} pal={pal} format={ms} axisFormat={(v) => `${Math.round(v)}`} height={280}
-                    from={series.data.from * 1000} to={series.data.to * 1000} group={`check-${id}`} onZoom={w.onZoom} marks={marks} />
+                    from={series.data.from * 1000} to={series.data.to * 1000} group={`check-${id}`} onZoom={w.onZoom} onReset={w.reset} marks={marks} />
                 ) : <Card><Text c="dimmed" size="sm">{t('no_data')}</Text></Card>}
               </Stack>
           </Section>
@@ -419,7 +419,7 @@ export default function CheckDetail() {
 
           {speed && series.data && (
             <MetricCard title={t('throughput')} series={speed} pal={pal} format={(v) => `${v.toFixed(1)} ${t('mbps')}`} axisFormat={(v) => `${Math.round(v)}`}
-              height={240} from={series.data.from * 1000} to={series.data.to * 1000} group={`check-${id}`} onZoom={w.onZoom} />
+              height={240} from={series.data.from * 1000} to={series.data.to * 1000} group={`check-${id}`} onZoom={w.onZoom} onReset={w.reset} />
           )}
 
           <Section title={t('probes_now')}>

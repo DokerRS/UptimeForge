@@ -3,8 +3,8 @@ import { IconCheck, IconUsers } from '@tabler/icons-react';
 import { useEffect } from 'react';
 import { DEFAULT_NUM_FONT, DEFAULT_UI_FONT, loadAllFonts, NUM_FONTS, UI_FONTS, type UfFont } from '../fonts';
 import { useLang, useT } from '../i18n';
-import { usePrefs, type BarStyle } from '../prefs';
-import { findTheme, mix, signalColors, signalVars, SIGNALS, THEMES, type UfSignal, type UfTheme } from '../themes';
+import { CHART_STYLES, usePrefs, type BarStyle, type ChartStyle } from '../prefs';
+import { chartPalette, findTheme, mix, signalColors, signalVars, SIGNALS, THEMES, type UfSignal, type UfTheme } from '../themes';
 import { Bar } from './SystemsTable';
 import { Dot } from './Status';
 
@@ -13,12 +13,16 @@ const L = {
     title: 'Внешний вид', themes: 'Тема', classic: 'Классика', warm: 'Тёплые', bright: 'Яркие', light: 'Светлые',
     signal: 'Индикаторы', signal_hint: 'Цвет капсулы с юзерами, полосок ЦП, памяти и диска, load avg и точек состояния на странице систем, а также точек, полосок за 24 часа и аптайма на странице проверок.',
     font: 'Шрифт интерфейса', num: 'Шрифт цифр', same: 'Как интерфейс',
+    charts: 'Графики', charts_hint: 'Как рисуются графики хостов, проверок и юзеров. Выделите участок мышью, чтобы приблизить; двойной клик — назад.',
+    zabbix: 'Zabbix', smooth: 'Плавный', mirror: 'Зеркальный',
     sample: 'Нода в сети', hint: 'Тема и шрифты сохраняются в вашем профиле и одинаковы на всех устройствах.',
   },
   en: {
     title: 'Appearance', themes: 'Theme', classic: 'Classic', warm: 'Warm', bright: 'Bright', light: 'Light',
     signal: 'Indicators', signal_hint: 'The colour of the users capsule, the CPU, memory and disk bars, load avg and the state dots on the systems page, and of the dots, 24-hour bars and uptime on the checks page.',
     font: 'Interface font', num: 'Numbers font', same: 'Same as interface',
+    charts: 'Charts', charts_hint: 'How host, check and user charts are drawn. Drag across a chart to zoom in; double-click to go back.',
+    zabbix: 'Zabbix', smooth: 'Smooth', mirror: 'Mirror',
     sample: 'Node online', hint: 'The theme and fonts are saved to your profile and follow you to every device.',
   },
 };
@@ -38,6 +42,46 @@ function Preview({ t }: { t: UfTheme }) {
         <Box h={20} style={{ borderRadius: 4, background: mix(t.primary, t.surface, 0.7) }} />
       </Stack>
     </Box>
+  );
+}
+
+// A day of traffic for the chart previews: the same shape in every style.
+const IN = [30, 34, 28, 40, 52, 47, 58, 66, 61, 70, 64, 55, 49];
+const OUT = [12, 15, 11, 18, 22, 19, 26, 30, 27, 33, 29, 24, 20];
+type P = readonly (readonly [number, number])[];
+
+/** ChartPreview draws a style on the current theme: incoming filled, outgoing a line, or below zero in mirror. */
+function ChartPreview({ style, theme }: { style: ChartStyle; theme: UfTheme }) {
+  const pal = chartPalette(theme);
+  const W = 160, H = 72;
+  const mirror = style === 'mirror', grid = style !== 'smooth';
+  const mid = mirror ? H / 2 : H - 4;
+  const k = (mirror ? 0.42 : 0.85) * (H / 100);
+  const pts = (v: number[], dir: number): P => v.map((y, i) => [4 + (i * (W - 8)) / (v.length - 1), mid - dir * y * k] as const);
+  const path = (p: P) => {
+    if (grid) return p.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`).join('');
+    let d = `M${p[0][0]},${p[0][1]}`;
+    for (let i = 1; i < p.length; i++) {
+      const [x0, y0] = p[i - 1], [x1, y1] = p[i], cx = (x0 + x1) / 2;
+      d += `C${cx},${y0} ${cx},${y1} ${x1},${y1}`;
+    }
+    return d;
+  };
+  const area = (p: P) => `${path(p)}L${p[p.length - 1][0]},${mid}L${p[0][0]},${mid}Z`;
+  const rx = pts(IN, 1), tx = pts(OUT, mirror ? -1 : 1);
+  const wash = grid ? 0.3 : 0.12;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} aria-hidden
+      style={{ display: 'block', borderRadius: 8, background: theme.surface, border: `1px solid ${theme.border}` }}>
+      {[0.25, 0.5, 0.75].map((f) => <line key={`h${f}`} x1={0} x2={W} y1={H * f} y2={H * f} stroke={pal.grid} strokeDasharray={grid ? '2 2' : undefined} />)}
+      {grid && [0.25, 0.75].map((f) => <line key={`v${f}`} y1={0} y2={H} x1={W * f} x2={W * f} stroke={pal.grid} strokeDasharray="2 2" />)}
+      <line y1={0} y2={H} x1={W / 2} x2={W / 2} stroke={pal.axis} />
+      <path d={area(rx)} fill={pal.series[0]} opacity={wash} />
+      {mirror && <path d={area(tx)} fill={pal.series[1]} opacity={wash} />}
+      <path d={path(rx)} fill="none" stroke={pal.series[0]} strokeWidth={1.6} />
+      <path d={path(tx)} fill="none" stroke={pal.series[1]} strokeWidth={1.6} />
+      {mirror && <line x1={0} x2={W} y1={mid} y2={mid} stroke={pal.axis} />}
+    </svg>
   );
 }
 
@@ -81,6 +125,7 @@ export function ThemePicker({ opened, onClose }: { opened: boolean; onClose: () 
   const font = prefs.font ?? DEFAULT_UI_FONT;
   const num = prefs.numFont ?? DEFAULT_NUM_FONT;
   const signal = prefs.signal ?? SIGNALS[0].id;
+  const chart: ChartStyle = prefs.chart && CHART_STYLES.includes(prefs.chart) ? prefs.chart : 'zabbix';
   const { lang } = useLang();
   useEffect(() => {
     if (opened) loadAllFonts(); // the samples are drawn in each font
@@ -112,6 +157,22 @@ export function ThemePicker({ opened, onClose }: { opened: boolean; onClose: () 
             {SIGNALS.map((x) => (
               <SignalTile key={x.id} s={x} theme={findTheme(current)} active={x.id === signal} onClick={() => setPrefs({ signal: x.id })}
                 bar={prefs.bar ?? 'pill'} lang={lang} />
+            ))}
+          </SimpleGrid>
+        </Stack>
+
+        <Stack gap="xs">
+          <Text size="xs" fw={700} c="dimmed" tt="uppercase" style={{ letterSpacing: '0.06em' }}>{t('charts')}</Text>
+          <Text size="xs" c="dimmed" mt={-4}>{t('charts_hint')}</Text>
+          <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="sm">
+            {CHART_STYLES.map((x) => (
+              <UnstyledButton key={x} onClick={() => setPrefs({ chart: x })} className="uf-theme" data-active={x === chart || undefined}>
+                <ChartPreview style={x} theme={findTheme(current)} />
+                <Group gap={6} mt={6} wrap="nowrap">
+                  {x === chart ? <IconCheck size={14} /> : <Text span c="dimmed" size="sm">—</Text>}
+                  <Text size="sm" fw={x === chart ? 650 : 400} truncate>{t(x)}</Text>
+                </Group>
+              </UnstyledButton>
             ))}
           </SimpleGrid>
         </Stack>

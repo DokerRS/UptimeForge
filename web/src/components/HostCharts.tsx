@@ -50,7 +50,8 @@ const pctFmt = (v: number) => `${v.toFixed(v < 10 ? 1 : 0)}%`;
 const rate = (v: number) => `${bytes(v, v >= 1024 * 1024 ? 1 : 0)}/s`;
 const perSec = (v: number) => `${compact(v)}/s`;
 const count = (v: number) => compact(v);
-const axisBits = (v: number) => bitrate(v).replace(/.0+ /, " ");
+// "1.0 Mbps" reads "1 Mbps" on the axis; "800 Kbps" keeps its zeros.
+const axisBits = (v: number) => bitrate(v).replace(/\.0+ /, ' ');
 
 /** niceBytes rounds a byte ceiling up to a quarter-power of two (32 GiB, 6 GiB), so axis steps read cleanly. */
 function niceBytes(v: number) {
@@ -121,33 +122,37 @@ export function HostCharts({ id, cores, online, sentMetrics }: { id: string; cor
       memTotal, diskTotal,
       cpu,
       load: [
-        ser('1m', s[0], line((p) => p.load1)), ser('5m', s[1], line((p) => p.load5)), ser('15m', s[2], line((p) => p.load15)),
+        // 1m is the shape, 5m and 15m the trend over it: three equal lines
+        // that mostly coincide read as noise.
+        ser('1m', s[0], line((p) => p.load1), { fill: true }),
+        ser('5m', s[1], line((p) => p.load5), { thin: true }),
+        ser('15m', s[2], line((p) => p.load15), { thin: true }),
       ],
       mem,
       disk: [ser(t('disk_used'), s[6], line((p) => p.disk), { area: true })],
       io: [
-        ser(t('read'), s[0], line(x('disk_read')), { peak: peakOf('disk_read') }),
-        ser(t('write'), s[1], line(x('disk_write')), { peak: peakOf('disk_write') }),
+        ser(t('read'), s[0], line(x('disk_read')), { peak: peakOf('disk_read'), fill: true }),
+        ser(t('write'), s[1], line(x('disk_write')), { peak: peakOf('disk_write'), mirror: true }),
       ],
       busy: [
         ser(t('util'), s[0], line(x('disk_util')), { peak: peakOf('disk_util') }),
         ser(t('iowait'), s[3], line(x('cpu_iowait')), { peak: peakOf('cpu_iowait') }),
       ],
       ops: [
-        ser(t('rops'), s[0], line(x('disk_rops')), { peak: peakOf('disk_rops') }),
-        ser(t('wops'), s[1], line(x('disk_wops')), { peak: peakOf('disk_wops') }),
+        ser(t('rops'), s[0], line(x('disk_rops')), { peak: peakOf('disk_rops'), fill: true }),
+        ser(t('wops'), s[1], line(x('disk_wops')), { peak: peakOf('disk_wops'), mirror: true }),
       ],
       net: [
-        ser(t('rx'), s[0], line((p) => (peaks ? p.rx_max : p.rx)), { peak: line((p) => p.rx_max) }),
-        ser(t('tx'), s[1], line((p) => (peaks ? p.tx_max : p.tx)), { peak: line((p) => p.tx_max) }),
+        ser(t('rx'), s[2], line((p) => (peaks ? p.rx_max : p.rx)), { peak: line((p) => p.rx_max), fill: true }),
+        ser(t('tx'), s[1], line((p) => (peaks ? p.tx_max : p.tx)), { peak: line((p) => p.tx_max), mirror: true }),
       ],
       pkts: [
-        ser(t('rx_pkts'), s[0], line(x('rx_pkts')), { peak: peakOf('rx_pkts') }),
-        ser(t('tx_pkts'), s[1], line(x('tx_pkts')), { peak: peakOf('tx_pkts') }),
+        ser(t('rx_pkts'), s[2], line(x('rx_pkts')), { peak: peakOf('rx_pkts'), fill: true }),
+        ser(t('tx_pkts'), s[1], line(x('tx_pkts')), { peak: peakOf('tx_pkts'), mirror: true }),
         ser(t('errs'), s[4], line(x('net_err')), { peak: peakOf('net_err') }),
       ],
       conn: [
-        ser(t('tcp'), s[0], line(x('tcp')), { peak: peakOf('tcp') }),
+        ser(t('tcp'), s[0], line(x('tcp')), { peak: peakOf('tcp'), fill: true }),
         ser(t('procs'), s[2], line(x('procs')), { peak: peakOf('procs') }),
         ser(t('blocked'), s[3], line(x('procs_blocked')), { peak: peakOf('procs_blocked') }),
       ],
@@ -155,7 +160,7 @@ export function HostCharts({ id, cores, online, sentMetrics }: { id: string; cor
   }, [pts, pal, peaks, t]);
 
   // A drag-zoom inside a sliding minute has nothing to zoom into.
-  const common = { pal, from, to, group, onZoom: live ? undefined : w.onZoom };
+  const common = { pal, from, to, group, onZoom: live ? undefined : w.onZoom, onReset: live ? undefined : w.reset, sampling: live ? undefined : peaks ? 'max' as const : 'average' as const };
   const toggle = live ? undefined : (
     <Tooltip label={t('peaks_hint')} multiline w={280} openDelay={400}>
       <SegmentedControl size="xs" radius="md" value={mode} onChange={(v) => setMode(v as 'avg' | 'peak')}
