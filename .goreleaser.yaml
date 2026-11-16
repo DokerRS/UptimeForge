@@ -75,8 +75,33 @@ signs:
     args: [run, ./tools/sign, "${artifact}"]
     signature: "${artifact}.sig"
 
+# A tag with docs/releases/<tag>.md gets that file as its notes (release.yml
+# passes --release-notes); other tags get the grouped commit list below.
 release:
   prerelease: auto
 
 changelog:
   use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^Merge pull request"
+      - "^Merge branch"
+  groups:
+    - title: Agents and rollout
+      regexp: '(?i)^(agents?|checkers?|join\.sh|invites?|rollout|release|sign)'
+      order: 0
+    - title: Hub and alerts
+      regexp: '(?i)^(hub|notify|geo(ip)?|api)'
+      order: 1
+    - title: Checks
+      regexp: '(?i)^checks?'
+      order: 2
+    - title: Interface
+      regexp: '(?i)^(ui|web|chart)'
+      order: 3
+    - title: Docs and demo
+      regexp: '(?i)^(docs|demo|readme)'
+      order: 4
+    - title: Other
+      order: 999
