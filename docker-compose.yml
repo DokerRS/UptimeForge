@@ -22,7 +22,9 @@ services:
       retries: 20
 
   hub:
-    image: intoxxx/uptimeforge-hub:latest
+    # Upgrade: docker compose pull && docker compose up -d. UF_VERSION in .env
+    # pins a release (0.2.0, or a candidate such as 0.2.0-rc1); unset is latest.
+    image: intoxxx/uptimeforge-hub:${UF_VERSION:-latest}
     restart: unless-stopped
     depends_on:
       postgres: {condition: service_healthy}
