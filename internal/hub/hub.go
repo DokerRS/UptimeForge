@@ -88,22 +88,23 @@ type Hub struct {
 }
 
 type probe struct {
-	cfg        *ProbeConfig
-	via        json.RawMessage
-	conn       *agentConn
-	runner     *runner.Runner
-	stopLocal  context.CancelFunc
-	online     bool
-	since      time.Time
-	hello      proto.Hello
-	sysinfo    *proto.SysInfo
-	metrics    *proto.Metrics
-	metricsAt  time.Time
-	noNet      bool
-	lastAssign []byte
-	host       map[string]*hostState // threshold timers per metric
-	addr       netip.Addr            // the agent's public address at its last connect
-	network    *NetworkView          // what is known about addr (SetNetwork)
+	cfg         *ProbeConfig
+	via         json.RawMessage
+	conn        *agentConn
+	runner      *runner.Runner
+	stopLocal   context.CancelFunc
+	online      bool
+	since       time.Time
+	hello       proto.Hello
+	sysinfo     *proto.SysInfo
+	metrics     *proto.Metrics
+	metricsAt   time.Time
+	noNet       bool
+	lastAssign  []byte
+	host        map[string]*hostState // threshold timers per metric
+	addr        netip.Addr            // the agent's public address at its last connect (AgentAddr)
+	addrClaimed bool                  // addr is what the agent reported, the hub saw a private one
+	network     *NetworkView          // what is known about addr (SetNetwork)
 
 	// Live metrics (live.go).
 	watchers  map[chan proto.Metrics]struct{}

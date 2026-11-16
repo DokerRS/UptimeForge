@@ -3550,7 +3550,7 @@ func TestWatchAgentConnectsLater(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stop()
-	if !r.h.attach(p, r.conn, proto.Hello{Proto: proto.Version}, HashToken("token-srv-0123456789"), netip.Addr{}) {
+	if !r.h.attach(p, r.conn, proto.Hello{Proto: proto.Version}, HashToken("token-srv-0123456789"), netip.Addr{}, false) {
 		t.Fatal("attach refused")
 	}
 	if _, ok := r.live(t); !ok {
@@ -3962,7 +3962,7 @@ func (r *rollRig) connectOn(id, ver string, launcher bool, goos, goarch string) 
 		r.h.detach(p, old)
 	}
 	ac := &agentConn{assign: make(chan []byte, 1), out: make(chan []byte, 16), cancel: func() {}}
-	if !r.h.attach(p, ac, proto.Hello{Proto: proto.Version, Version: ver, Launcher: launcher, OS: goos, Arch: goarch}, HashToken(rollToken(id)), netip.Addr{}) {
+	if !r.h.attach(p, ac, proto.Hello{Proto: proto.Version, Version: ver, Launcher: launcher, OS: goos, Arch: goarch}, HashToken(rollToken(id)), netip.Addr{}, false) {
 		r.t.Fatalf("attach %s refused", id)
 	}
 	r.conns[id] = ac
@@ -5197,5 +5197,71 @@ func TestRolloutNeedsSignedAgents(t *testing.T) {
 	r2.expectSent()
 	if st := r2.h.Rollout(); st.Blocked == "" {
 		t.Fatalf("no agents dir: %+v", st)
+	}
+}
+
+// A hub behind NAT or a proxy that hides the client (a home router's HTTPS
+// forwarding) sees every agent come from one private address, so the network
+// a checker is labelled by comes from the public address the agent reports.
+// An address the hub sees itself wins: an agent cannot claim another network
+// where the hub knows better.
+func TestAgentPublicAddress(t *testing.T) {
+	pub, other := netip.MustParseAddr("203.0.113.7"), netip.MustParseAddr("198.51.100.9")
+	for _, tc := range []struct {
+		name     string
+		conn     netip.Addr // what ClientIP gives (zero: the test server's loopback)
+		reported string
+		want     netip.Addr
+		claimed  bool
+	}{
+		{"private connection, public report", netip.Addr{}, pub.String(), pub, true},
+		{"public connection wins", other, pub.String(), other, false},
+		{"private report ignored", netip.Addr{}, "10.0.0.5", netip.MustParseAddr("127.0.0.1"), false},
+		{"garbage report ignored", netip.Addr{}, "not-an-ip", netip.MustParseAddr("127.0.0.1"), false},
+		{"no report", netip.Addr{}, "", netip.MustParseAddr("127.0.0.1"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRollRig(t, rolloutCfg(t, 1, nil))
+			got := make(chan netip.Addr, 1)
+			r.h.OnAgentAddr = func(id string, ip netip.Addr) { got <- ip }
+			var hd http.Handler = r.h.Handler()
+			if tc.conn.IsValid() {
+				inner := hd
+				hd = http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+					inner.ServeHTTP(w, q.WithContext(WithClientIP(q.Context(), tc.conn)))
+				})
+			}
+			srv := httptest.NewServer(hd)
+			defer srv.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/api/agent/ws",
+				&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer " + rollToken("a01")}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.CloseNow()
+			hello, _ := proto.Encode(proto.TypeHello, proto.Hello{Proto: proto.Version, Version: "0.2.0", PublicIP: tc.reported})
+			if err := c.Write(ctx, websocket.MessageText, hello); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case ip := <-got:
+				if ip != tc.want {
+					t.Fatalf("looked up %v, want %v", ip, tc.want)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("the hub never looked the agent's address up")
+			}
+			n := r.h.Snapshot().Probes[0].Network
+			if n == nil || n.IP != tc.want.String() || n.Reported != tc.claimed {
+				t.Fatalf("network view %+v, want ip %v reported %v", n, tc.want, tc.claimed)
+			}
+			// the lookup's answer for the chosen address is accepted
+			r.h.SetNetwork("a01", geoip.Network{IP: tc.want, Country: "KZ"})
+			if n := r.h.Snapshot().Probes[0].Network; n == nil || n.Country != "KZ" || n.Reported != tc.claimed {
+				t.Fatalf("after the lookup %+v", n)
+			}
+		})
 	}
 }

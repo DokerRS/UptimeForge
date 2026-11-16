@@ -80,7 +80,8 @@ func main() {
 		*token = tok
 	}
 	cfg := agent.Config{HubURL: *hubURL, Token: *token, MetricsInterval: *metrics, SourceIP: *src, Insecure: *insecure,
-		StateDir: *stateDir, Launcher: os.Getenv("UF_LAUNCHER") == "1", LauncherBuiltin: os.Getenv("UF_LAUNCHER_BUILTIN")}
+		StateDir: *stateDir, Launcher: os.Getenv("UF_LAUNCHER") == "1", LauncherBuiltin: os.Getenv("UF_LAUNCHER_BUILTIN"),
+		PublicIPURLs: agent.DefaultPublicIPURLs}
 	if *metrics == 0 {
 		cfg.MetricsInterval = -1
 	}

@@ -19,12 +19,31 @@ var NetworkLabels = []string{"country", "asn", "isp"}
 // NetworkView is where an agent connects from. IP is for admins only: the API
 // clears it for viewers.
 type NetworkView struct {
-	IP      string    `json:"ip,omitempty"`
-	Country string    `json:"country,omitempty"`
-	ASN     string    `json:"asn,omitempty"`
-	Org     string    `json:"org,omitempty"`
-	ISP     string    `json:"isp,omitempty"`
-	At      time.Time `json:"at"`
+	IP      string `json:"ip,omitempty"`
+	Country string `json:"country,omitempty"`
+	ASN     string `json:"asn,omitempty"`
+	Org     string `json:"org,omitempty"`
+	ISP     string `json:"isp,omitempty"`
+	// Reported: IP is what the agent said, not what the hub saw (the hub
+	// sees a private address only, see AgentAddr).
+	Reported bool      `json:"reported,omitempty"`
+	At       time.Time `json:"at"`
+}
+
+// AgentAddr is the address an agent's network is judged by: where the
+// connection comes from when that is a public address, else the public
+// address the agent reports (its connection reached the hub through NAT or
+// a proxy that hides the client), else the connection's address as it is.
+// reported says the address is the agent's claim.
+func AgentAddr(conn netip.Addr, reported string) (ip netip.Addr, claimed bool) {
+	conn = conn.Unmap()
+	if publicAddr(conn) {
+		return conn, false
+	}
+	if r, err := netip.ParseAddr(reported); err == nil && publicAddr(r.Unmap()) {
+		return r.Unmap(), true
+	}
+	return conn, false
 }
 
 type clientIPKey struct{}
@@ -84,7 +103,7 @@ func (h *Hub) SetNetwork(probeID string, n geoip.Network) {
 		return
 	}
 	now := time.Now()
-	p.network = &NetworkView{Country: n.Country, ASN: n.ASN, Org: n.Org, ISP: geoip.ShortISP(n.Org), At: now}
+	p.network = &NetworkView{Country: n.Country, ASN: n.ASN, Org: n.Org, ISP: geoip.ShortISP(n.Org), Reported: p.addrClaimed, At: now}
 	if n.IP.IsValid() {
 		p.network.IP = n.IP.String()
 	}

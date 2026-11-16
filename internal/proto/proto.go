@@ -66,6 +66,11 @@ type Hello struct {
 	// Launcher says the agent runs under `uptimeforge-agent launch`, which
 	// installs updates and rolls bad ones back; only such agents can update.
 	Launcher bool `json:"launcher,omitempty"`
+	// PublicIP is the address the agent's traffic leaves from, as public
+	// "what is my address" services see it. The hub takes it only when the
+	// connection itself comes from a private address (a hub behind NAT or a
+	// proxy that hides the client); an address the hub sees always wins.
+	PublicIP string `json:"public_ip,omitempty"`
 }
 
 type Assign struct {

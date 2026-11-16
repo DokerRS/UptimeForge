@@ -117,13 +117,17 @@ func (h *Hub) handleAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ac := &agentConn{conn: conn, assign: make(chan []byte, 1), out: make(chan []byte, 16), cancel: cancel}
-	ip := ClientIP(r)
-	if !h.attach(p, ac, hello, hash, ip) {
+	remote := ClientIP(r)
+	ip, claimed := AgentAddr(remote, hello.PublicIP)
+	if !h.attach(p, ac, hello, hash, ip, claimed) {
 		conn.Close(websocket.StatusPolicyViolation, "probe token revoked")
 		return
 	}
 	defer h.detach(p, ac)
-	log := h.log.With("probe", id, "remote", ip.String())
+	log := h.log.With("probe", id, "remote", remote.String())
+	if claimed {
+		log = log.With("public", ip.String())
+	}
 	log.Info("agent connected", "version", hello.Version, "host", hello.Hostname, "os", hello.OS+"/"+hello.Arch)
 	if h.OnAgentAddr != nil && ip.IsValid() {
 		h.OnAgentAddr(id, ip)
@@ -210,9 +214,9 @@ func (h *Hub) handleAgent(w http.ResponseWriter, r *http.Request) {
 // attach makes ac the probe's connection. The token is checked again here,
 // under the lock: it may have been rotated, or the probe removed or made
 // virtual, while the agent was still in the handshake. ip is where the agent
-// connects from; from another address its network is unknown until
-// SetNetwork.
-func (h *Hub) attach(p *probe, ac *agentConn, hello proto.Hello, tokenHash string, ip netip.Addr) bool {
+// connects from (claimed: as it reported it, see AgentAddr); from another
+// address its network is unknown until SetNetwork.
+func (h *Hub) attach(p *probe, ac *agentConn, hello proto.Hello, tokenHash string, ip netip.Addr, claimed bool) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.probes[p.cfg.ID] != p || p.cfg.Virtual() || p.cfg.TokenHash == "" ||
@@ -224,10 +228,10 @@ func (h *Hub) attach(p *probe, ac *agentConn, hello proto.Hello, tokenHash strin
 	}
 	now := time.Now()
 	p.conn, p.online, p.since, p.hello = ac, true, now, hello
-	if ip = ip.Unmap(); ip != p.addr {
-		p.addr, p.network = ip, nil
+	if ip = ip.Unmap(); ip != p.addr || claimed != p.addrClaimed {
+		p.addr, p.addrClaimed, p.network = ip, claimed, nil
 		if ip.IsValid() {
-			p.network = &NetworkView{IP: ip.String(), At: now}
+			p.network = &NetworkView{IP: ip.String(), Reported: claimed, At: now}
 		}
 	}
 	h.seen[p.cfg.ID] = true
