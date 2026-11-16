@@ -577,3 +577,37 @@ func TestHelloHostname(t *testing.T) {
 		}
 	}
 }
+
+// The hello says the agent's public address, as the first service that knows
+// it answers (Cloudflare's trace format or a bare address), so a hub behind
+// NAT can still tell which network a checker is on. No answer: no address.
+func TestHelloPublicIP(t *testing.T) {
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "no", 502) }))
+	defer down.Close()
+	trace := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "fl=1\nh=x\nip=203.0.113.7\nloc=KZ\n")
+	}))
+	defer trace.Close()
+	bare := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "198.51.100.9\n") }))
+	defer bare.Close()
+	private := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "ip=10.1.2.3\n") }))
+	defer private.Close()
+	for _, tc := range []struct {
+		urls []string
+		want string
+	}{
+		{[]string{down.URL, trace.URL, bare.URL}, "203.0.113.7"},
+		{[]string{bare.URL}, "198.51.100.9"},
+		{[]string{private.URL, down.URL}, ""},
+	} {
+		hub := newUpdateHub(t, nil, "")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		a := New(ctx, Config{HubURL: hub.srv.URL, Token: "t", MetricsInterval: -1, StateDir: t.TempDir(), PublicIPURLs: tc.urls}, slog.New(slog.DiscardHandler))
+		go a.Run(ctx)
+		hello := <-hub.hello
+		cancel()
+		if hello.PublicIP != tc.want {
+			t.Errorf("urls %v: hello public ip = %q, want %q", tc.urls, hello.PublicIP, tc.want)
+		}
+	}
+}

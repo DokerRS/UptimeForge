@@ -59,6 +59,10 @@ type Config struct {
 	SourceIP string
 	// Insecure allows a hub reached over plain http/ws beyond loopback.
 	Insecure bool
+	// PublicIPURLs are asked, in turn, for the agent's public address, which
+	// the hello carries (DefaultPublicIPURLs; nil asks none): a hub behind
+	// NAT judges the agent's network by it.
+	PublicIPURLs []string
 	// DenyTypes are check types this probe refuses to run, whatever the hub
 	// assigns (e.g. docker, real-browser, system-service).
 	DenyTypes []string
@@ -106,6 +110,7 @@ type Agent struct {
 	srcs  []string
 	srcAt int
 	srcOK string // last address the hub was reached from, for the log
+	pub   publicIP
 	local func() []string
 
 	updating    atomic.Bool   // an update is being installed (or was, and the restart is due)
@@ -340,7 +345,7 @@ func (a *Agent) session(ctx context.Context) error {
 	}
 	hello, _ := proto.Encode(proto.TypeHello, proto.Hello{
 		Proto: proto.Version, Version: version.Version, Hostname: host, OS: runtime.GOOS, Arch: runtime.GOARCH,
-		Launcher: a.cfg.Launcher,
+		Launcher: a.cfg.Launcher, PublicIP: a.pub.get(ctx, client, a.cfg.PublicIPURLs),
 	})
 	if err := conn.Write(ctx, websocket.MessageText, hello); err != nil {
 		return err
