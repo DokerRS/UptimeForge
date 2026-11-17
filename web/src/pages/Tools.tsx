@@ -1,14 +1,14 @@
 import {
-  Alert, Badge, Box, Button, Card, Code, Group, Progress, SegmentedControl, SimpleGrid, Stack, Text, TextInput, Textarea,
+  Alert, Badge, Box, Button, Card, Code, Group, Loader, Progress, SegmentedControl, SimpleGrid, Stack, Text, TextInput, Textarea,
   Tooltip,
 } from '@mantine/core';
 import {
-  IconAlertCircle, IconBolt, IconClockHour4, IconFlask2, IconGauge, IconPlayerPlay, IconRoute, IconWorld,
+  IconAlertCircle, IconBolt, IconClockHour4, IconFlask2, IconGauge, IconPlayerPlay, IconPlayerStop, IconRoute, IconWorld,
 } from '@tabler/icons-react';
 import { useMutation } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { api, ApiError, isChecker, useProbes, type ProbeRow, type RunOutcome, type RunRow } from '../api';
+import { api, ApiError, apiStream, isChecker, useProbes, type ProbeRow, type RunOutcome, type RunRow } from '../api';
 import { Section } from '../components/Cards';
 import { PageHeader } from '../components/Misc';
 import { ProbePicker } from '../components/ProbePicker';
@@ -24,11 +24,12 @@ const L = {
     title: 'Проверка конфигов', subtitle: 'Проверьте ссылку, прокси или подписку со всех проб сразу — до того, как добавлять в мониторинг',
     mode_single: 'Один конфиг', mode_sub: 'Подписка целиком', target: 'Что проверить', sub_url: 'URL подписки',
     target_hint: 'Ссылка vless:// vmess:// trojan:// ss:// hy2://, MTProxy tg://proxy или t.me/proxy, http(s)-адрес или host:port',
-    sub_hint: 'Хаб скачает подписку и проверит каждый конфиг (до 100) с выбранных проб',
+    sub_hint: 'Хаб скачает подписку и проверит каждый конфиг (до 100) с выбранных проб: по одному, до 5 секунд на конфиг',
     ua: 'User-Agent', ua_hint: 'Необязательно. Панели (Remnawave, Marzban, 3x-ui) выбирают формат ответа по User-Agent',
     probes: 'С каких проб', probes_hint: 'По умолчанию — вся инфраструктура онлайн. Агентов проверок выбирайте явно', all_online: 'Вся инфраструктура онлайн',
     run: 'Проверить', running: 'Проверяем… {0} с', running_hint: 'Ждём ответы всех проб — обычно до 30 секунд',
-    running_sub: 'Подписка проверяется по 8 конфигов параллельно — это может занять пару минут',
+    running_sub: 'Скачиваем подписку…', sub_progress: 'Проверено {0} из {1}', sub_stopped: 'Остановлено: проверено {0} из {1}',
+    stop: 'Остановить', pending: 'ещё не проверен', checking: 'проверяется',
     result: 'Результат', latency: 'задержка', failed_after: 'ошибка через', speed: 'скорость', mbps: 'Мбит/с', exit: 'Выход в интернет', phases: 'Фазы',
     v_ok: 'Работает со всех проб · {0} из {0}', v_down: 'Не работает ни с одной пробы', v_blocked: 'Блок в {0}',
     v_partial: 'Частично · не работает с {0} из {1}', v_unknown: 'Вердикта нет: ни одна проба не смогла проверить',
@@ -43,11 +44,12 @@ const L = {
     title: 'Config checker', subtitle: 'Test a link, proxy or subscription from every probe at once — before adding it to monitoring',
     mode_single: 'Single target', mode_sub: 'Whole subscription', target: 'What to check', sub_url: 'Subscription URL',
     target_hint: 'A vless:// vmess:// trojan:// ss:// hy2:// link, a tg://proxy or t.me/proxy MTProxy link, an http(s) URL or host:port',
-    sub_hint: 'The hub downloads the subscription and checks every config (up to 100) from the selected probes',
+    sub_hint: 'The hub downloads the subscription and checks every config (up to 100) from the selected probes: one at a time, up to 5 seconds each',
     ua: 'User-Agent', ua_hint: 'Optional. Panels (Remnawave, Marzban, 3x-ui) pick the response format by User-Agent',
     probes: 'From probes', probes_hint: 'Defaults to all online infrastructure. Pick checker agents explicitly', all_online: 'All online infrastructure',
     run: 'Run', running: 'Checking… {0}s', running_hint: 'Waiting for every probe to answer — usually under 30 seconds',
-    running_sub: 'Configs are checked 8 at a time — this can take a couple of minutes',
+    running_sub: 'Downloading the subscription…', sub_progress: 'Checked {0} of {1}', sub_stopped: 'Stopped: checked {0} of {1}',
+    stop: 'Stop', pending: 'not checked yet', checking: 'checking',
     result: 'Result', latency: 'latency', failed_after: 'failed after', speed: 'throughput', mbps: 'Mbit/s', exit: 'Exits to the internet', phases: 'Phases',
     v_ok: 'Works from every probe · {0} of {0}', v_down: 'Fails from every probe', v_blocked: 'Blocked in {0}',
     v_partial: 'Partial · fails from {0} of {1}', v_unknown: 'No verdict: no probe could check it',
@@ -272,7 +274,14 @@ function cellText(o?: RunOutcome) {
   return l >= 1000 ? `${(l / 1000).toFixed(1)}s` : `${Math.round(l)}`;
 }
 
-function SubscriptionResult({ rows, noNet }: { rows: RunRow[]; noNet: Set<string> }) {
+/**
+ * SubscriptionResult is the table of a subscription test as it fills: the
+ * hub checks the configs in order, so the first `checked` rows have their
+ * answers, the next one is being checked and the rest wait.
+ */
+function SubscriptionResult({ rows, checked, running, done, noNet }: {
+  rows: RunRow[]; checked: number; running: boolean; done: boolean; noNet: Set<string>;
+}) {
   const t = useT(L);
   const reason = useReason();
   const { lang } = useLang();
@@ -291,6 +300,12 @@ function SubscriptionResult({ rows, noNet }: { rows: RunRow[]; noNet: Set<string
       <Stack gap="md">
         <Group gap="lg" wrap="wrap">
           <Text fw={650} fz="lg">{t('configs', rows.length, configsWord)}</Text>
+          {!done && (
+            <Group gap={6} wrap="nowrap">
+              {running ? <Loader size={14} /> : <IconPlayerStop size={16} color="var(--mantine-color-dimmed)" />}
+              <Text size="sm" c="dimmed" className="uf-num">{t(running ? 'sub_progress' : 'sub_stopped', checked, rows.length)}</Text>
+            </Group>
+          )}
           {([['ok', 'works'], ['partial', 'partial'], ['blocked', 'blocked'], ['down', 'fails']] as const).map(([k, label]) =>
             count(k) > 0 && (
               <Group key={k} gap={6} wrap="nowrap">
@@ -299,6 +314,7 @@ function SubscriptionResult({ rows, noNet }: { rows: RunRow[]; noNet: Set<string
               </Group>
             ))}
         </Group>
+        {!done && running && <Progress value={rows.length ? (100 * checked) / rows.length : 0} size="sm" radius="xl" animated striped />}
         <Box className="uf-scroll-x">
           <Box className="uf-matrix" style={{ gridTemplateColumns: cols, minWidth: 160 + probes.length * 60, rowGap: 8 }}>
             <Text size="xs" c="dimmed" fw={700} tt="uppercase" style={{ letterSpacing: '0.06em' }}>{t('config')}</Text>
@@ -313,10 +329,12 @@ function SubscriptionResult({ rows, noNet }: { rows: RunRow[]; noNet: Set<string
             {rows.map((r, i) => {
               const cells = new Map((r.outcomes ?? []).map((o) => [o.probe, o]));
               const v = verdicts[i];
+              const waiting = i >= checked; // not answered yet: being checked now, queued, or left by a stop
+              const now = waiting && running && i === checked;
               return [
-                <Tooltip key={`n-${i}`} label={<Stack gap={2}><Text size="xs" fw={600}>{r.name}</Text><Text size="xs">{r.target}</Text>{r.error && <Text size="xs" c="red.3">{r.error}</Text>}</Stack>} multiline maw={360}>
-                  <Group gap={6} wrap="nowrap" pr="xs" style={{ minWidth: 0 }}>
-                    <KindIcon kind={r.error ? 'down' : v.kind} size={15} />
+                <Tooltip key={`n-${i}`} label={<Stack gap={2}><Text size="xs" fw={600}>{r.name}</Text><Text size="xs">{r.target}</Text>{r.error && <Text size="xs" c="red.3">{r.error}</Text>}{waiting && <Text size="xs" c="dimmed">{t(now ? 'checking' : 'pending')}</Text>}</Stack>} multiline maw={360}>
+                  <Group gap={6} wrap="nowrap" pr="xs" style={{ minWidth: 0, opacity: waiting && !now ? 0.55 : 1 }}>
+                    {now ? <Loader size={15} /> : waiting ? <IconClockHour4 size={15} color="var(--mantine-color-dimmed)" /> : <KindIcon kind={r.error ? 'down' : v.kind} size={15} />}
                     <Box style={{ minWidth: 0 }}>
                       <Text size="sm" fw={500} truncate>{r.name || r.target}</Text>
                       <Text size="xs" c="dimmed" truncate ff="monospace">{r.target}</Text>
@@ -334,7 +352,7 @@ function SubscriptionResult({ rows, noNet }: { rows: RunRow[]; noNet: Set<string
                       label={
                         <Stack gap={2}>
                           <Text size="xs" fw={700}>{r.name} · {p.name}</Text>
-                          {!res ? <Text size="xs">{o?.error ? reason(o.error, o.error) : t('legend_none')}</Text> : res.status === 'up' ? (
+                          {!res ? <Text size="xs">{o?.error ? reason(o.error, o.error) : waiting ? t(now ? 'checking' : 'pending') : t('legend_none')}</Text> : res.status === 'up' ? (
                             <Text size="xs">{t('legend_up')} · {ms(res.latency_ms)}{res.bps ? ` · ${mbps(res.bps)!.toFixed(1)} ${t('mbps')}` : ''}</Text>
                           ) : (
                             <>
@@ -391,12 +409,34 @@ export default function Tools() {
 
   const run = useMutation<{ rows: RunRow[]; mode: Mode }, ApiError, void>({
     mutationFn: async () => {
-      const res = await api<{ rows: RunRow[] }>('POST', '/api/v1/tools/run', {
-        target: target.trim(), probes: selected, mode, user_agent: mode === 'subscription' ? ua.trim() : '',
-      });
+      if (mode === 'subscription') {
+        // The hub checks one config at a time and streams each as it is done.
+        abort.current?.abort();
+        const ac = new AbortController();
+        abort.current = ac;
+        setSub(null);
+        try {
+          await apiStream('/api/v1/tools/run', { target: target.trim(), probes: selected, mode, user_agent: ua.trim() }, (line) => {
+            const m = line as { rows?: RunRow[]; row?: number; outcomes?: RunOutcome[]; done?: boolean };
+            if (m.rows) setSub({ rows: m.rows, checked: 0, done: false });
+            else if (typeof m.row === 'number') {
+              const at = m.row;
+              setSub((s) => s && { ...s, checked: at + 1, rows: s.rows.map((r, i) => (i === at ? { ...r, outcomes: m.outcomes ?? [] } : r)) });
+            } else if (m.done) setSub((s) => s && { ...s, done: true });
+          }, ac.signal);
+        } catch (e) {
+          if (!ac.signal.aborted) throw e; // stopped by hand: keep what was checked
+        }
+        return { rows: [], mode };
+      }
+      setSub(null);
+      const res = await api<{ rows: RunRow[] }>('POST', '/api/v1/tools/run', { target: target.trim(), probes: selected, mode, user_agent: '' });
       return { rows: res.rows ?? [], mode };
     },
   });
+  const [sub, setSub] = useState<{ rows: RunRow[]; checked: number; done: boolean } | null>(null);
+  const abort = useRef<AbortController | null>(null);
+  useEffect(() => () => abort.current?.abort(), []);
 
   const canRun = target.trim() !== '' && selected.length > 0 && !run.isPending;
   const go = () => canRun && run.mutate();
@@ -454,33 +494,42 @@ export default function Tools() {
             <ProbePicker mode="ids" label={t('probes')} description={t('probes_hint')} secrets={secrets} value={selected} onChange={setSelected} />
             <Group justify="space-between" wrap="wrap" gap="sm">
               <Button variant="subtle" size="xs" onClick={() => setSelected(online)} disabled={!probes.length}>{t('all_online')}</Button>
-              <Button
-                leftSection={<IconPlayerPlay size={16} />}
-                onClick={go}
-                disabled={!canRun}
-                loading={run.isPending}
-                variant="gradient"
-                gradient={{ from: '#20cfae', to: '#2a8cf0', deg: 90 }}
-                miw={160}
-              >
-                {t('run')}
-              </Button>
+              {run.isPending && sub ? (
+                <Button leftSection={<IconPlayerStop size={16} />} onClick={() => abort.current?.abort()} variant="default" miw={160}>
+                  {t('stop')}
+                </Button>
+              ) : (
+                <Button
+                  leftSection={<IconPlayerPlay size={16} />}
+                  onClick={go}
+                  disabled={!canRun}
+                  loading={run.isPending}
+                  variant="gradient"
+                  gradient={{ from: '#20cfae', to: '#2a8cf0', deg: 90 }}
+                  miw={160}
+                >
+                  {t('run')}
+                </Button>
+              )}
             </Group>
           </Stack>
         </Card>
 
-        {run.isPending && <Running mode={mode} />}
+        {run.isPending && !sub && <Running mode={mode} />}
         {run.isError && !run.isPending && (
           <Alert color="red" variant="light" icon={<IconAlertCircle size={18} />} title={t('result')}>{run.error.message}</Alert>
         )}
-        {run.data && !run.isPending && (
+        {sub && (
           <Section title={t('result')}>
-            {run.data.mode === 'subscription'
-              ? <SubscriptionResult rows={run.data.rows} noNet={noNet} />
-              : run.data.rows[0] && <SingleResult row={run.data.rows[0]} noNet={noNet} />}
+            <SubscriptionResult rows={sub.rows} checked={sub.checked} running={run.isPending} done={sub.done} noNet={noNet} />
           </Section>
         )}
-        {!run.data && !run.isPending && !run.isError && (
+        {run.data && run.data.mode !== 'subscription' && !run.isPending && run.data.rows[0] && (
+          <Section title={t('result')}>
+            <SingleResult row={run.data.rows[0]} noNet={noNet} />
+          </Section>
+        )}
+        {!run.data && !sub && !run.isPending && !run.isError && (
           <Card padding="xl" style={{ borderStyle: 'dashed', background: 'transparent' }}>
             <Stack align="center" gap={6} py="md">
               <Group gap="xs" c="dimmed"><IconFlask2 size={22} /><IconRoute size={22} /></Group>
