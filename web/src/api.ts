@@ -273,6 +273,45 @@ export async function api<T>(method: string, path: string, body?: unknown): Prom
   return data as T;
 }
 
+/**
+ * apiStream sends a request whose answer is NDJSON and calls onLine with each
+ * line as it arrives. An error status is thrown as by api(); aborting the
+ * signal stops reading.
+ */
+export async function apiStream(path: string, body: unknown, onLine: (line: unknown) => void, signal?: AbortSignal): Promise<void> {
+  const res = await fetch(path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    let msg = `HTTP ${res.status}`;
+    try {
+      msg = ((await res.json()) as { error?: string }).error ?? msg;
+    } catch {
+      /* not JSON */
+    }
+    if (res.status === 401) queryClient.invalidateQueries({ queryKey: ['auth'] });
+    throw new ApiError(res.status, msg);
+  }
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += value;
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (line) onLine(JSON.parse(line));
+    }
+  }
+  if (buf.trim()) onLine(JSON.parse(buf));
+}
+
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: { retry: (n, e) => !(e instanceof ApiError && e.status < 500) && n < 2, refetchOnWindowFocus: true, staleTime: 3000 },
