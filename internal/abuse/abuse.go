@@ -2,9 +2,9 @@
 // client addresses connect under it at once, across every Remnawave node.
 //
 // It is pure logic: the panel is polled and the results stored elsewhere
-// (internal/app). An address counts while it is in a node's list of open
-// connections; the panel's lastSeen is when the last new connection opened,
-// so a long-lived one can carry a lastSeen of days ago and is still there.
+// (internal/app). A node lists an address for days after the client left, so
+// only one the panel saw in use inside the window counts, and IPv4 addresses
+// count per network (/20 by default) so a mobile CGNAT pool is one client.
 package abuse
 
 import (
@@ -42,6 +42,10 @@ type Rule struct {
 	Ban       *Threshold      `yaml:"ban" json:"ban,omitempty"`             // default 5, 10, 30m
 	Cooldown  checks.Duration `yaml:"cooldown" json:"cooldown,omitempty"`   // between messages about one user, default 24h
 	Retention checks.Duration `yaml:"retention" json:"retention,omitempty"` // how long addresses are kept, default 72h
+	// IPv4Prefix counts IPv4 addresses per network of this size, default
+	// 20: a mobile operator's CGNAT sends one phone out of many addresses of
+	// its pool at once, all close together. 32 counts every address.
+	IPv4Prefix int `yaml:"ipv4_prefix" json:"ipv4_prefix,omitempty"`
 	// AllowUsers and AllowTags are never reported nor banned: service
 	// accounts (a bridge's own user) and people known to be fine.
 	AllowUsers []int64  `yaml:"allow_users" json:"allow_users,omitempty"`
@@ -65,6 +69,9 @@ func (r *Rule) Effective() Rule {
 	def(&o.Window, 5*time.Minute)
 	def(&o.Cooldown, 24*time.Hour)
 	def(&o.Retention, 72*time.Hour)
+	if o.IPv4Prefix == 0 {
+		o.IPv4Prefix = 20
+	}
 	fill := func(t *Threshold, k, n int, hold time.Duration) *Threshold {
 		var x Threshold
 		if t != nil {
@@ -97,6 +104,9 @@ func (r Rule) Validate() error {
 	}
 	if k := r.Retention.D(); k < 24*time.Hour || k > 14*24*time.Hour {
 		return errors.New("remnawave.abuse.retention must be between 24h and 14d")
+	}
+	if r.IPv4Prefix < 16 || r.IPv4Prefix > 32 {
+		return errors.New("remnawave.abuse.ipv4_prefix must be between 16 and 32")
 	}
 	for name, t := range map[string]*Threshold{"notify": r.Notify, "ban": r.Ban} {
 		if t.K < 2 || t.N < 0 {
@@ -224,22 +234,46 @@ func (t *Tracker) Seen() []Seen {
 	return out
 }
 
-// Count is how many addresses of the user were seen after since, and on
-// which nodes.
-func (t *Tracker) Count(user int64, since time.Time) (int, []string) {
-	n, nodes := 0, []string{}
+// Group is what an address counts as: an IPv4 address as its network of
+// bits (32: itself), an IPv6 /64 as is.
+func Group(prefix string, bits int) string {
+	a, err := netip.ParseAddr(prefix)
+	if err != nil || !a.Is4() || bits >= 32 {
+		return prefix
+	}
+	p, err := a.Prefix(bits)
+	if err != nil {
+		return prefix
+	}
+	return p.String()
+}
+
+// Tally is what Count found: Groups is compared with the threshold, Addrs
+// is how many addresses that is.
+type Tally struct {
+	Groups int
+	Addrs  int
+	Nodes  []string
+}
+
+// Count is how many networks (IPv4 per bits, IPv6 per /64) and addresses of
+// the user were seen after since, and on which nodes.
+func (t *Tracker) Count(user int64, since time.Time, bits int) Tally {
+	c, groups := Tally{Nodes: []string{}}, map[string]bool{}
 	for _, s := range t.seen[user] {
 		if s.Last.After(since) {
-			n++
+			c.Addrs++
+			groups[Group(s.Prefix, bits)] = true
 			for _, x := range s.Nodes {
-				if !slices.Contains(nodes, x) {
-					nodes = append(nodes, x)
+				if !slices.Contains(c.Nodes, x) {
+					c.Nodes = append(c.Nodes, x)
 				}
 			}
 		}
 	}
-	sort.Strings(nodes)
-	return n, nodes
+	c.Groups = len(groups)
+	sort.Strings(c.Nodes)
+	return c
 }
 
 // Addresses lists the user's addresses, newest first.
@@ -302,8 +336,9 @@ type State struct {
 type Verdict struct {
 	User   User
 	Limit  int
-	Now    int      // addresses at once (inside the window)
-	Day    int      // addresses over 24 hours
+	Now    int      // networks at once (inside the window), what the thresholds count
+	Addrs  int      // addresses at once
+	Day    int      // networks over 24 hours
 	Nodes  []string `json:"nodes"`
 	Level  Level
 	Since  time.Time
@@ -379,7 +414,8 @@ func Evaluate(at time.Time, r Rule, tr *Tracker, users map[int64]User, fallback 
 		if r.allowed(u) || u.Limit <= 0 {
 			continue // dropped from the states as well
 		}
-		now, nodes := tr.Count(id, at.Add(-r.Window.D()))
+		c := tr.Count(id, at.Add(-r.Window.D()), r.IPv4Prefix)
+		now := c.Groups
 		level := LevelOK
 		if now >= r.Notify.For(u.Limit) {
 			level = LevelNotify
@@ -434,9 +470,9 @@ func Evaluate(at time.Time, r Rule, tr *Tracker, users map[int64]User, fallback 
 			next[id] = st
 		}
 		if level != LevelOK || act != ActNone {
-			day, _ := tr.Count(id, at.Add(-24*time.Hour))
+			day := tr.Count(id, at.Add(-24*time.Hour), r.IPv4Prefix).Groups
 			since := st.NotifySince
-			out = append(out, Verdict{User: u, Limit: u.Limit, Now: now, Day: day, Nodes: nodes, Level: level, Since: since, Action: act})
+			out = append(out, Verdict{User: u, Limit: u.Limit, Now: now, Addrs: c.Addrs, Day: day, Nodes: c.Nodes, Level: level, Since: since, Action: act})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

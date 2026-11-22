@@ -19,7 +19,7 @@ const L = {
     mode_off: 'Выключен', mode_notify: 'Уведомления', mode_ban: 'Уведомления и блокировка', settings: 'Настройки',
     off_hint: 'Антифрод выключен. Включить: Настройки → Remnawave → Антифрод.',
     cover: 'Ноды ответили {0} из {1} · опрос {2}', cover_wait: 'Ещё не опрашивал', users: 'пользователей в панели: {0}',
-    client: 'Клиент', limit: 'Лимит', now: 'Сейчас', day: 'За 24 ч', nodes: 'Ноды', state: 'Состояние', last: 'Последнее событие',
+    client: 'Клиент', limit: 'Лимит', now: 'Сейчас', now_net: 'Подсетей /{0}', addrs: '{0} адр.', network: 'Подсеть', day: 'За 24 ч', nodes: 'Ноды', state: 'Состояние', last: 'Последнее событие',
     s_banned: 'заблокирован', s_ban: 'выше порога блокировки {0}', s_notify: 'выше порога {0}', s_ok: 'в норме',
     a_notify: 'уведомление', a_would_ban: 'был бы заблокирован', a_ban: 'заблокирован', a_ban_failed: 'не удалось заблокировать', a_enable: 'разблокирован вручную',
     empty: 'Подозрительных клиентов нет', empty_hint: 'Здесь появятся клиенты выше порога и все, по кому были события за неделю.',
@@ -33,7 +33,7 @@ const L = {
     mode_off: 'Off', mode_notify: 'Notify', mode_ban: 'Notify and ban', settings: 'Settings',
     off_hint: 'The antifraud is off. Turn it on in Settings → Remnawave → Antifraud.',
     cover: 'Nodes answered: {0} of {1} · polled {2}', cover_wait: 'Not polled yet', users: 'users in the panel: {0}',
-    client: 'Subscriber', limit: 'Limit', now: 'Now', day: '24 h', nodes: 'Nodes', state: 'State', last: 'Last event',
+    client: 'Subscriber', limit: 'Limit', now: 'Now', now_net: '/{0} networks', addrs: '{0} addr.', network: 'Network', day: '24 h', nodes: 'Nodes', state: 'State', last: 'Last event',
     s_banned: 'banned', s_ban: 'over the ban threshold {0}', s_notify: 'over the threshold {0}', s_ok: 'normal',
     a_notify: 'notice', a_would_ban: 'would be banned', a_ban: 'banned', a_ban_failed: 'ban failed', a_enable: 'unbanned by hand',
     empty: 'No suspicious subscribers', empty_hint: 'Subscribers over a threshold show here, and everyone with an event this week.',
@@ -106,12 +106,13 @@ function UserDrawer({ id, onClose }: { id: number | null; onClose: () => void })
           <Section title={t('addresses')}>
             {d.addresses.length === 0 ? <Text size="sm" c="dimmed">{t('no_addr')}</Text> : (
               <ScrollArea type="auto">
-                <Table striped miw={640}>
-                  <Table.Thead><Table.Tr><Table.Th>{t('prefix')}</Table.Th><Table.Th>{t('org')}</Table.Th><Table.Th>{t('nodes')}</Table.Th><Table.Th>{t('first')}</Table.Th><Table.Th>{t('seen')}</Table.Th></Table.Tr></Table.Thead>
+                <Table striped miw={760}>
+                  <Table.Thead><Table.Tr><Table.Th>{t('prefix')}</Table.Th><Table.Th>{t('network')}</Table.Th><Table.Th>{t('org')}</Table.Th><Table.Th>{t('nodes')}</Table.Th><Table.Th>{t('first')}</Table.Th><Table.Th>{t('seen')}</Table.Th></Table.Tr></Table.Thead>
                   <Table.Tbody>
                     {d.addresses.map((a) => (
                       <Table.Tr key={a.prefix}>
                         <Table.Td><Text size="sm" ff="monospace">{a.prefix}</Text></Table.Td>
+                        <Table.Td><Text size="sm" ff="monospace" c="dimmed">{a.network && a.network !== a.prefix ? a.network : '—'}</Text></Table.Td>
                         <Table.Td><Text size="sm">{a.org ? [a.org, a.asn?.toUpperCase()].filter(Boolean).join(' · ') : '—'}</Text></Table.Td>
                         <Table.Td><Text size="sm">{a.nodes.join(', ')}</Text></Table.Td>
                         <Table.Td><Text size="sm">{clock(a.first, true)}</Text></Table.Td>
@@ -152,6 +153,7 @@ export default function Abuse() {
   if (q.isError) return (<><PageHeader title={t('title')} /><QueryError error={q.error} onRetry={() => q.refetch()} /></>);
   const v = q.data;
   const cov = v?.coverage;
+  const grouped = !!v?.ipv4_prefix && v.ipv4_prefix < 32;
   const modeColor = cov?.mode === 'ban' ? 'red' : cov?.mode === 'off' ? 'gray' : 'orange';
   return (
     <>
@@ -185,7 +187,7 @@ export default function Abuse() {
                 <Table highlightOnHover miw={820} verticalSpacing="sm">
                   <Table.Thead>
                     <Table.Tr>
-                      <Table.Th>{t('client')}</Table.Th><Table.Th ta="right">{t('limit')}</Table.Th><Table.Th ta="right">{t('now')}</Table.Th>
+                      <Table.Th>{t('client')}</Table.Th><Table.Th ta="right">{t('limit')}</Table.Th><Table.Th ta="right">{grouped ? t('now_net', v.ipv4_prefix ?? 20) : t('now')}</Table.Th>
                       <Table.Th ta="right">{t('day')}</Table.Th><Table.Th>{t('nodes')}</Table.Th><Table.Th>{t('state')}</Table.Th><Table.Th>{t('last')}</Table.Th>
                     </Table.Tr>
                   </Table.Thead>
@@ -197,7 +199,9 @@ export default function Abuse() {
                           <Text size="xs" c="dimmed" ff="monospace">{r.user.id}{r.user.telegram_id ? ` · tg ${r.user.telegram_id}` : ''}</Text>
                         </Table.Td>
                         <Table.Td ta="right"><Text size="sm" className="uf-num">{r.limit}</Text></Table.Td>
-                        <Table.Td ta="right"><Text size="sm" fw={700} className="uf-num">{r.now || '—'}</Text></Table.Td>
+                        <Table.Td ta="right"><Text size="sm" fw={700} className="uf-num">{r.now || '—'}</Text>
+                          {grouped && !!r.addrs && r.addrs !== r.now && <Text size="xs" c="dimmed" className="uf-num">{t('addrs', r.addrs)}</Text>}
+                        </Table.Td>
                         <Table.Td ta="right"><Text size="sm" className="uf-num">{r.day || '—'}</Text></Table.Td>
                         <Table.Td><Text size="sm" lineClamp={1}>{(r.nodes ?? []).join(', ') || '—'}</Text></Table.Td>
                         <Table.Td><StateCell row={r} /></Table.Td>

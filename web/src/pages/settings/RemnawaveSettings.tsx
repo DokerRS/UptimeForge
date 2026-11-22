@@ -41,7 +41,9 @@ const L = {
     af_window: 'Одновременно — это за', af_window_hint: 'Адреса, которые были в подключениях за это время',
     af_notify_t: 'Уведомление', af_ban_t: 'Блокировка', af_k: 'Лимит ×', af_n: 'или лимит +', af_hold: 'Держится',
     af_formula: 'Порог: больше из «лимит × {0}» и «лимит + {1}»',
-    af_example: 'Лимит 1 → {0} адр., лимит 3 → {1}, лимит 5 → {2}',
+    af_example: 'Лимит 1 → {0}, лимит 3 → {1}, лимит 5 → {2}',
+    af_prefix: 'IPv4 считать по подсетям', af_prefix_hint: 'Мобильный CGNAT выпускает один телефон через много адресов пула рядом друг с другом',
+    af_p32: 'Каждый адрес отдельно', af_p24: '/24', af_p22: '/22', af_p20: '/20 (рекомендуется)', af_p16: '/16',
     af_ban_note: 'В режиме уведомлений вместо блокировки приходит сообщение «был бы заблокирован».',
     af_cooldown: 'Повторять сообщение не чаще', af_cooldown_hint: 'Раньше — только если адресов стало вдвое больше',
     af_retention: 'Хранить адреса', af_allow_users: 'Не трогать: id пользователей', af_allow_users_hint: 'Служебные пользователи мостов и проверенные клиенты. Enter после каждого',
@@ -77,7 +79,9 @@ const L = {
     af_window: '"At once" means within', af_window_hint: 'Addresses seen in the connections over this time',
     af_notify_t: 'Notify', af_ban_t: 'Ban', af_k: 'Limit ×', af_n: 'or limit +', af_hold: 'Held for',
     af_formula: 'Threshold: the larger of limit × {0} and limit + {1}',
-    af_example: 'Limit 1 → {0} addresses, limit 3 → {1}, limit 5 → {2}',
+    af_example: 'Limit 1 → {0}, limit 3 → {1}, limit 5 → {2}',
+    af_prefix: 'Count IPv4 per network', af_prefix_hint: 'A mobile CGNAT sends one phone out of many pool addresses close together',
+    af_p32: 'Every address', af_p24: '/24', af_p22: '/22', af_p20: '/20 (recommended)', af_p16: '/16',
     af_ban_note: 'In notify mode a "would be banned" message comes instead of the ban.',
     af_cooldown: 'Repeat a message at most every', af_cooldown_hint: 'Sooner only if the addresses doubled',
     af_retention: 'Keep addresses for', af_allow_users: 'Leave alone: user ids', af_allow_users_hint: 'Bridge service users and known subscribers. Enter after each',
@@ -285,9 +289,14 @@ export default function RemnawaveSettings() {
                     else apply();
                   }}
                 />
-                <Select label={t('af_window')} description={t('af_window_hint')} value={win} allowDeselect={false} disabled={m || mode === 'off'} maw={320}
-                  data={dur([['2m', 'm2'], ['5m', 'm5'], ['10m', 'm10'], ['15m', 'm15'], ['30m', 'm30']], win)}
-                  onChange={(v) => v && setAf((a) => { a.window = v; })} />
+                <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+                  <Select label={t('af_window')} description={t('af_window_hint')} value={win} allowDeselect={false} disabled={m || mode === 'off'}
+                    data={dur([['2m', 'm2'], ['5m', 'm5'], ['10m', 'm10'], ['15m', 'm15'], ['30m', 'm30']], win)}
+                    onChange={(v) => v && setAf((a) => { a.window = v; })} />
+                  <Select label={t('af_prefix')} description={t('af_prefix_hint')} value={String(af.ipv4_prefix ?? 20)} allowDeselect={false} disabled={m || mode === 'off'}
+                    data={[32, 24, 22, 20, 16].map((p) => ({ value: String(p), label: t(`af_p${p}` as 'af_p20') }))}
+                    onChange={(v) => v && setAf((a) => { a.ipv4_prefix = Number(v) === 20 ? undefined : Number(v); })} />
+                </SimpleGrid>
                 {threshold('notify', nt)}
                 {threshold('ban', bt)}
                 {mode !== 'ban' && <Text size="xs" c="dimmed">{t('af_ban_note')}</Text>}

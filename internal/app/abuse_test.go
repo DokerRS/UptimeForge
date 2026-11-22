@@ -58,7 +58,7 @@ func newAbusePanel(t *testing.T) *abusePanel {
 			// keeps for days after the client left.
 			fresh := time.Unix(0, abuseClock.Load()).UTC().Format(time.RFC3339)
 			for i := range int(p.ips.Load()) {
-				ips = append(ips, fmt.Sprintf(`{"ip":"83.1.0.%d","lastSeen":"%s"}`, i+1, fresh))
+				ips = append(ips, fmt.Sprintf(`{"ip":"%d.1.16.1","lastSeen":"%s"}`, 20+i, fresh))
 			}
 			for i := range int(p.stale.Load()) {
 				ips = append(ips, fmt.Sprintf(`{"ip":"83.2.%d.%d","lastSeen":"2026-11-20T00:00:00Z"}`, i/200, i%200+1))
@@ -154,7 +154,7 @@ func TestAbuseNotifiesOnceAfterTheHold(t *testing.T) {
 	}
 	n := s[0]
 	// The bridge address on node b is no client: 8 addresses, not 9.
-	if n.Action != "notify" || n.UserID != 7 || n.Username != "saveoleshki" || n.TelegramID != 8620400077 || n.Limit != 1 || n.Now != 8 || strings.Join(n.Nodes, ",") != "DE-1" {
+	if n.Action != "notify" || n.UserID != 7 || n.Username != "saveoleshki" || n.TelegramID != 8620400077 || n.Addrs != 8 || n.Prefix != 20 || n.Limit != 1 || n.Now != 8 || strings.Join(n.Nodes, ",") != "DE-1" {
 		t.Fatalf("notice %+v", n)
 	}
 	if acts := p.acts(); len(acts) != 0 {
@@ -349,7 +349,7 @@ func TestAbuseNoticeHasAddressesAndProviders(t *testing.T) {
 		t.Fatalf("operators %v", n.Operators)
 	}
 	v, _ := a.AbuseUser(context.Background(), 7)
-	if len(v.Addresses) != 8 || v.Addresses[0].Org != "MTS PJSC" {
+	if len(v.Addresses) != 8 || v.Addresses[0].Org != "MTS PJSC" || !strings.HasSuffix(v.Addresses[0].Network, ".16.0/20") {
 		t.Fatalf("page addresses %+v", v.Addresses)
 	}
 }

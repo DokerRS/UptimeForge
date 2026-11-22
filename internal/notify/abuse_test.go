@@ -118,3 +118,24 @@ func TestAbuseTestIsASampleCard(t *testing.T) {
 		t.Fatalf("calls %+v", c)
 	}
 }
+
+// Counted per /20, the card says so and still gives the addresses.
+func TestAbuseCardCountsNetworks(t *testing.T) {
+	n := AbuseNotice{Action: "notify", UserID: 5660, Limit: 3, Now: 10, Addrs: 28, Day: 14, Prefix: 20}
+	rich := (&Formatter{Lang: "ru"}).RichAbuse(n)
+	for _, want := range []string{"🌐 Подсетей /20 сейчас", "<b>10</b> · адресов 28 · в 3,3 раза больше лимита", "🕓 Подсетей за 24 часа"} {
+		if !strings.Contains(rich, want) {
+			t.Errorf("no %q in:\n%s", want, rich)
+		}
+	}
+	if s := (&Formatter{Lang: "en"}).RichAbuse(n); !strings.Contains(s, "🌐 /20 networks now") || !strings.Contains(s, "<b>10</b> · 28 addresses") {
+		t.Errorf("en card:\n%s", s)
+	}
+	if s := (&Formatter{Lang: "ru"}).Abuse(n); !strings.Contains(s, "подсетей /20 сейчас: <b>10</b> (адресов 28)") {
+		t.Errorf("plain:\n%s", s)
+	}
+	n.Prefix = 32 // every address counted: the card reads as before
+	if s := (&Formatter{Lang: "ru"}).RichAbuse(n); !strings.Contains(s, "🌐 Адресов сейчас") || strings.Contains(s, "Подсетей") {
+		t.Errorf("per address:\n%s", s)
+	}
+}
