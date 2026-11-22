@@ -245,7 +245,7 @@ func (a *App) abuseRound(ctx context.Context, at time.Time) {
 	}
 	for _, v := range verdicts {
 		if v.Action != abuse.ActNone {
-			a.abuseAct(ctx, c, at, v)
+			a.abuseAct(ctx, c, at, v, rule)
 		}
 	}
 	if err := a.Store.PutSetting(ctx, abuseLastRoundKey, at); err != nil {
@@ -322,9 +322,9 @@ func (a *App) abuseLoad(ctx context.Context, at time.Time, rule abuse.Rule) {
 
 // abuseAct sends the message, and in ban mode disables the subscription and
 // then closes its connections. A refused disable closes nothing.
-func (a *App) abuseAct(ctx context.Context, c *remnawave.Client, at time.Time, v abuse.Verdict) {
+func (a *App) abuseAct(ctx context.Context, c *remnawave.Client, at time.Time, v abuse.Verdict, rule abuse.Rule) {
 	n := notify.AbuseNotice{Action: string(v.Action), UserID: v.User.ID, Username: v.User.Username, TelegramID: v.User.TelegramID,
-		Limit: v.Limit, Now: v.Now, Day: v.Day, Nodes: v.Nodes}
+		Limit: v.Limit, Now: v.Now, Addrs: v.Addrs, Day: v.Day, Prefix: rule.IPv4Prefix, Nodes: v.Nodes}
 	if v.Action == abuse.ActBan {
 		actx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		err := c.DisableUser(actx, v.User.ID)
@@ -429,6 +429,7 @@ type AbuseRow struct {
 	User      abuse.User        `json:"user"`
 	Limit     int               `json:"limit"`
 	Now       int               `json:"now"`
+	Addrs     int               `json:"addrs"`
 	Day       int               `json:"day"`
 	Nodes     []string          `json:"nodes"`
 	Level     abuse.Level       `json:"level"`
@@ -439,8 +440,9 @@ type AbuseRow struct {
 }
 
 type AbuseView struct {
-	Coverage AbuseCoverage `json:"coverage"`
-	Rows     []AbuseRow    `json:"rows"`
+	Coverage   AbuseCoverage `json:"coverage"`
+	Rows       []AbuseRow    `json:"rows"`
+	IPv4Prefix int           `json:"ipv4_prefix"` // what Now counts: IPv4 networks of this size
 }
 
 // Abuse is the Antifraud page: everyone over a threshold now, and everyone
@@ -451,10 +453,11 @@ func (a *App) Abuse(ctx context.Context) AbuseView {
 	view := AbuseView{Coverage: r.cover, Rows: []AbuseRow{}}
 	if cfg := a.Hub.Config(); cfg.Remnawave != nil {
 		view.Coverage.Mode = cfg.Remnawave.Abuse.Effective().Mode
+		view.IPv4Prefix = cfg.Remnawave.Abuse.Effective().IPv4Prefix
 	}
 	byID := map[int64]int{}
 	for _, v := range r.verdicts {
-		row := AbuseRow{User: v.User, Limit: v.Limit, Now: v.Now, Day: v.Day, Nodes: v.Nodes, Level: v.Level, Since: v.Since}
+		row := AbuseRow{User: v.User, Limit: v.Limit, Now: v.Now, Addrs: v.Addrs, Day: v.Day, Nodes: v.Nodes, Level: v.Level, Since: v.Since}
 		if st := r.states[v.User.ID]; st.BanFailed {
 			row.BanFailed = true
 		} else {
@@ -496,8 +499,9 @@ func (a *App) Abuse(ctx context.Context) AbuseView {
 // AbuseAddress is one address of a subscriber with its operator.
 type AbuseAddress struct {
 	abuse.Seen
-	ASN string `json:"asn,omitempty"`
-	Org string `json:"org,omitempty"`
+	Network string `json:"network"` // what it counts as: its IPv4 network, or the IPv6 /64
+	ASN     string `json:"asn,omitempty"`
+	Org     string `json:"org,omitempty"`
 }
 
 // AbuseUserView is one subscriber's addresses and history, for admins only.
@@ -521,8 +525,12 @@ func (a *App) AbuseUser(ctx context.Context, id int64) (AbuseUserView, error) {
 		seen = r.tr.Addresses(id)
 	}
 	r.mu.Unlock()
+	bits := (*abuse.Rule)(nil).Effective().IPv4Prefix
+	if cfg := a.Hub.Config(); cfg.Remnawave != nil {
+		bits = cfg.Remnawave.Abuse.Effective().IPv4Prefix
+	}
 	for i, s := range seen {
-		x := AbuseAddress{Seen: s}
+		x := AbuseAddress{Seen: s, Network: abuse.Group(s.Prefix, bits)}
 		if i < abuseMaxLookups {
 			x.ASN, x.Org = a.abuseNetwork(ctx, s.Prefix)
 		}

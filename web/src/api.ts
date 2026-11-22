@@ -571,19 +571,20 @@ export function useApiMutation<TBody, TOut = unknown>(method: string, path: (b: 
 export interface AbuseThreshold { k?: number; n?: number; hold?: string }
 export interface AbuseRule {
   mode?: 'off' | 'notify' | 'ban'; window?: string; notify?: AbuseThreshold; ban?: AbuseThreshold;
-  cooldown?: string; retention?: string; allow_users?: number[]; allow_tags?: string[];
+  cooldown?: string; retention?: string; ipv4_prefix?: number; allow_users?: number[]; allow_tags?: string[];
 }
 export interface AbuseUser { id: number; username?: string; telegram_id?: number; limit: number; status?: string; tag?: string }
 export interface AbuseEvent { at: string; user: number; username?: string; action: string; now: number; day: number; limit: number; nodes: string[]; error?: string }
 export interface AbuseRow {
-  user: AbuseUser; limit: number; now: number; day: number; nodes: string[] | null; level: 'ok' | 'notify' | 'ban';
+  user: AbuseUser; limit: number; now: number; addrs?: number; day: number; nodes: string[] | null; level: 'ok' | 'notify' | 'ban';
   since?: string; banned_at?: string; ban_failed?: boolean; last_event?: AbuseEvent;
 }
 export interface AbuseView {
   coverage: { mode: string; at?: string; nodes: number; answered: number; error?: string; users: number };
   rows: AbuseRow[];
+  ipv4_prefix?: number;
 }
-export interface AbuseSeen { user: number; prefix: string; first: string; last: string; nodes: string[]; asn?: string; org?: string }
+export interface AbuseSeen { user: number; prefix: string; first: string; last: string; nodes: string[]; network?: string; asn?: string; org?: string }
 export interface AbuseUserView { user: AbuseUser; state: { level?: string; notify_since?: string; banned_at?: string; ban_failed?: boolean }; addresses: AbuseSeen[]; events: AbuseEvent[] }
 
 export const useAbuse = () => useQuery({ queryKey: ['abuse'], queryFn: () => api<AbuseView>('GET', '/api/v1/abuse'), refetchInterval: 30_000 });

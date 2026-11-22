@@ -511,12 +511,13 @@ func fakeRemnawave() http.Handler {
 			case r.Method == http.MethodPost && strings.HasPrefix(p, "/api/connections/by-node/"):
 				fmt.Fprintf(w, `{"response":{"jobId":"job-%s"}}`, strings.TrimPrefix(p, "/api/connections/by-node/"))
 			case strings.HasPrefix(p, "/api/connections/by-node/job-"):
-				// shared_sub sits on two nodes from 14 addresses, family on one from 4.
+				// shared_sub sits on two nodes from 14 addresses, family on one from 4,
+				// each address in a /20 of its own.
 				var users []string
 				ips := func(n, base int) string {
 					var l []string
 					for i := range n {
-						l = append(l, fmt.Sprintf(`{"ip":"91.%d.%d.%d","lastSeen":%q}`, 100+base, i/50, i%250+1, time.Now().UTC().Format(time.RFC3339)))
+						l = append(l, fmt.Sprintf(`{"ip":"%d.%d.16.1","lastSeen":%q}`, 31+i, 100+base, time.Now().UTC().Format(time.RFC3339)))
 					}
 					return strings.Join(l, ",")
 				}
