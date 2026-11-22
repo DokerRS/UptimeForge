@@ -224,7 +224,7 @@ export default function Checkers() {
                 <Table.Tr>
                   <Table.Th>{t('name')}</Table.Th><Table.Th>{t('operator')}</Table.Th><Table.Th>{t('state')}</Table.Th>
                   <Table.Th>{t('trusted')}</Table.Th><Table.Th>{t('version')}</Table.Th><Table.Th ta="right">{t('checks')}</Table.Th>
-                  {isAdmin && <Table.Th w={48} />}
+                  {isAdmin && <Table.Th w={76} />}
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
@@ -265,20 +265,24 @@ export default function Checkers() {
                       </Table.Td>
                       {isAdmin && (
                         <Table.Td onClick={(e) => e.stopPropagation()}>
-                          <Menu position="bottom-end">
-                            <Menu.Target><ActionIcon variant="subtle" color="gray" aria-label={t('more')}><IconDots size={16} /></ActionIcon></Menu.Target>
-                            <Menu.Dropdown>
-                              <Menu.Item leftSection={<IconFlask2 size={15} />} onClick={() => nav(`/tools?probe=${enc(p.id)}`)}>{t('check_here')}</Menu.Item>
-                              {!p.managed && (
-                                <>
+                          <Group gap={2} wrap="nowrap" justify="flex-end">
+                            <Tooltip label={t('check_here')}>
+                              <ActionIcon variant="subtle" color="teal" aria-label={t('check_here')} disabled={!p.online} onClick={() => nav(`/tools?probe=${enc(p.id)}`)}>
+                                <IconFlask2 size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                            {!p.managed && (
+                              <Menu position="bottom-end">
+                                <Menu.Target><ActionIcon variant="subtle" color="gray" aria-label={t('more')}><IconDots size={16} /></ActionIcon></Menu.Target>
+                                <Menu.Dropdown>
                                   <Menu.Item leftSection={<IconPencil size={15} />} onClick={() => setRenaming(p)}>{t('rename')}</Menu.Item>
                                   <Menu.Item leftSection={<IconLock size={15} />} onClick={() => setTrust(p, !p.config.trusted)}>{t(p.config.trusted ? 'trust_off' : 'trust_on')}</Menu.Item>
                                   <Menu.Divider />
                                   <Menu.Item color="red" leftSection={<IconTrash size={15} />} onClick={() => remove(p)}>{t('delete')}</Menu.Item>
-                                </>
-                              )}
-                            </Menu.Dropdown>
-                          </Menu>
+                                </Menu.Dropdown>
+                              </Menu>
+                            )}
+                          </Group>
                         </Table.Td>
                       )}
                     </Table.Tr>
