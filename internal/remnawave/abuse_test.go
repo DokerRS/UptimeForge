@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakePanel answers the antifraud endpoints the way Remnawave 3.4 does.
@@ -85,7 +86,8 @@ func TestNodeConnectionsWaitsForTheJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || strings.Join(got[7], ",") != "83.149.47.17,2a00:1fa0::1" || got[9][0] != "5.6.7.8" {
+	if len(got) != 2 || len(got[7]) != 2 || got[7][0].IP != "83.149.47.17" || got[7][1].IP != "2a00:1fa0::1" || got[9][0].IP != "5.6.7.8" ||
+		!got[7][0].LastSeen.Equal(time.Date(2026, 11, 20, 9, 56, 11, 0, time.UTC)) {
 		t.Fatalf("got %v", got)
 	}
 	if f.polls != 2 {

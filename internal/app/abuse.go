@@ -155,7 +155,7 @@ func (a *App) abuseRound(ctx context.Context, at time.Time) {
 	}
 	type answer struct {
 		node  string
-		conns map[int64][]string
+		conns map[int64][]remnawave.Conn
 		err   error
 	}
 	answers := make([]answer, len(live))
@@ -189,10 +189,22 @@ func (a *App) abuseRound(ctx context.Context, at time.Time) {
 
 	r.mu.Lock()
 	r.tr.SetNodeIPs(nodeIPs)
+	// A node lists an address for days after the client left: only one used
+	// inside the window (plus a minute for clocks apart) is a live client.
+	freshSince := at.Add(-rule.Window.D() - time.Minute)
 	for _, x := range answers {
-		if x.err == nil {
-			r.tr.Observe(at, x.node, x.conns)
+		if x.err != nil {
+			continue
 		}
+		live := make(map[int64][]string, len(x.conns))
+		for id, conns := range x.conns {
+			for _, c := range conns {
+				if c.LastSeen.After(freshSince) {
+					live[id] = append(live[id], c.IP)
+				}
+			}
+		}
+		r.tr.Observe(at, x.node, live)
 	}
 	// A gap since the last round (the hub down, the antifraud off) counts for
 	// nothing: running holds move on by it, and until the window has filled

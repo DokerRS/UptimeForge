@@ -9,10 +9,17 @@ import (
 	"time"
 )
 
-// NodeConnections lists the open connections of one node: user id → client
-// addresses. The panel answers through a job: start it, then poll until it
+// Conn is one client address of a user on a node. LastSeen is when the
+// address was last used: a node keeps an address listed for days after the
+// client left, so only a recent one means a live client.
+type Conn struct {
+	IP       string
+	LastSeen time.Time
+}
+
+// NodeConnections lists the client addresses of one node per user id. The panel answers through a job: start it, then poll until it
 // is done (about a second on a node with a thousand users online).
-func (c *Client) NodeConnections(ctx context.Context, nodeUUID string) (map[int64][]string, error) {
+func (c *Client) NodeConnections(ctx context.Context, nodeUUID string) (map[int64][]Conn, error) {
 	var job struct {
 		JobID string `json:"jobId"`
 	}
@@ -30,7 +37,8 @@ func (c *Client) NodeConnections(ctx context.Context, nodeUUID string) (map[int6
 			Users []struct {
 				UserID int64 `json:"userId"`
 				IPs    []struct {
-					IP string `json:"ip"`
+					IP       string    `json:"ip"`
+					LastSeen time.Time `json:"lastSeen"`
 				} `json:"ips"`
 			} `json:"users"`
 		} `json:"result"`
@@ -58,10 +66,10 @@ func (c *Client) NodeConnections(ctx context.Context, nodeUUID string) (map[int6
 	if st.Result == nil {
 		return nil, errors.New("remnawave: a completed connections job has no result")
 	}
-	out := make(map[int64][]string, len(st.Result.Users))
+	out := make(map[int64][]Conn, len(st.Result.Users))
 	for _, u := range st.Result.Users {
 		for _, ip := range u.IPs {
-			out[u.UserID] = append(out[u.UserID], ip.IP)
+			out[u.UserID] = append(out[u.UserID], Conn{IP: ip.IP, LastSeen: ip.LastSeen})
 		}
 	}
 	return out, nil

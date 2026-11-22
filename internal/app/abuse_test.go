@@ -25,9 +25,10 @@ import (
 // bridge address of node a, which is no client.
 type abusePanel struct {
 	ips       atomic.Int32
-	down      atomic.Bool // connections fail
-	failDis   atomic.Bool // disable answers 500
-	usersDown atomic.Bool // the user directory fails
+	down      atomic.Bool  // connections fail
+	failDis   atomic.Bool  // disable answers 500
+	usersDown atomic.Bool  // the user directory fails
+	stale     atomic.Int32 // addresses user 7 left days ago, still listed by node a
 	mu        sync.Mutex
 	actions   []string
 	*httptest.Server
@@ -53,13 +54,19 @@ func newAbusePanel(t *testing.T) *abusePanel {
 			fmt.Fprintf(w, `{"response":{"jobId":"job-%s"}}`, strings.TrimPrefix(path, "/api/connections/by-node/"))
 		case r.Method == "GET" && path == "/api/connections/by-node/job-na":
 			var ips []string
+			// Live addresses were seen this minute; stale ones are what a node
+			// keeps for days after the client left.
+			fresh := time.Unix(0, abuseClock.Load()).UTC().Format(time.RFC3339)
 			for i := range int(p.ips.Load()) {
-				ips = append(ips, fmt.Sprintf(`{"ip":"83.1.0.%d","lastSeen":"2026-11-20T00:00:00Z"}`, i+1))
+				ips = append(ips, fmt.Sprintf(`{"ip":"83.1.0.%d","lastSeen":"%s"}`, i+1, fresh))
 			}
-			fmt.Fprintf(w, `{"response":{"isCompleted":true,"isFailed":false,"result":{"users":[{"userId":7,"ips":[%s]},{"userId":8,"ips":[{"ip":"83.9.9.9","lastSeen":"2026-11-20T00:00:00Z"}]}]}}}`, strings.Join(ips, ","))
+			for i := range int(p.stale.Load()) {
+				ips = append(ips, fmt.Sprintf(`{"ip":"83.2.%d.%d","lastSeen":"2026-11-20T00:00:00Z"}`, i/200, i%200+1))
+			}
+			fmt.Fprintf(w, `{"response":{"isCompleted":true,"isFailed":false,"result":{"users":[{"userId":7,"ips":[%s]},{"userId":8,"ips":[{"ip":"83.9.9.9","lastSeen":"%s"}]}]}}}`, strings.Join(ips, ","), fresh)
 		case r.Method == "GET" && path == "/api/connections/by-node/job-nb":
 			// The bridge (node a) carries its clients' traffic as user 7 too.
-			io.WriteString(w, `{"response":{"isCompleted":true,"isFailed":false,"result":{"users":[{"userId":7,"ips":[{"ip":"194.26.229.27","lastSeen":"2026-11-22T00:00:00Z"}]}]}}}`)
+			fmt.Fprintf(w, `{"response":{"isCompleted":true,"isFailed":false,"result":{"users":[{"userId":7,"ips":[{"ip":"194.26.229.27","lastSeen":"%s"}]}]}}}`, time.Unix(0, abuseClock.Load()).UTC().Format(time.RFC3339))
 		case path == "/api/users" && p.usersDown.Load():
 			w.WriteHeader(500)
 			io.WriteString(w, `{"message":"boom"}`)
@@ -121,8 +128,13 @@ func abuseApp(t *testing.T, dbURL string, p *abusePanel, rule *abuse.Rule) (*App
 	}
 }
 
+// abuseClock is the time of the round being run: the fake panel dates its
+// live addresses with it.
+var abuseClock atomic.Int64
+
 func rounds(a *App, from, to int) {
 	for i := from; i <= to; i++ {
+		abuseClock.Store(abuseT0.Add(time.Duration(i) * time.Minute).UnixNano())
 		a.abuseRound(context.Background(), abuseT0.Add(time.Duration(i)*time.Minute))
 	}
 }
@@ -339,5 +351,23 @@ func TestAbuseNoticeHasAddressesAndProviders(t *testing.T) {
 	v, _ := a.AbuseUser(context.Background(), 7)
 	if len(v.Addresses) != 8 || v.Addresses[0].Org != "MTS PJSC" {
 		t.Fatalf("page addresses %+v", v.Addresses)
+	}
+}
+
+// A node keeps an address in its list for days after the client left (the
+// panel's lastSeen says when it was last used): only addresses seen inside
+// the window count, so a subscriber with 3 live addresses and 100 stale
+// ones is no case at all.
+func TestAbuseStaleEntriesDoNotCount(t *testing.T) {
+	p := newAbusePanel(t)
+	p.ips.Store(3)
+	p.stale.Store(100)
+	a, sent := abuseApp(t, pgtest.URL(t), p, nil)
+	rounds(a, 0, 30)
+	if s := sent(); len(s) != 0 {
+		t.Fatalf("stale addresses counted: %+v", s)
+	}
+	if v, _ := a.AbuseUser(context.Background(), 7); len(v.Addresses) != 3 {
+		t.Fatalf("addresses kept: %d, want the 3 live ones", len(v.Addresses))
 	}
 }
