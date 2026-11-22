@@ -22,8 +22,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/wh3r3ar3you/uptimeforge/internal/agent"
 	"github.com/wh3r3ar3you/uptimeforge/internal/abuse"
+	"github.com/wh3r3ar3you/uptimeforge/internal/agent"
 	"github.com/wh3r3ar3you/uptimeforge/internal/checks"
 	"github.com/wh3r3ar3you/uptimeforge/internal/geoip"
 	"github.com/wh3r3ar3you/uptimeforge/internal/model"

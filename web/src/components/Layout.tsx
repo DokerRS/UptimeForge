@@ -4,7 +4,7 @@ import {
 import { useDisclosure } from '@mantine/hooks';
 import {
   IconActivityHeartbeat, IconAlertTriangle, IconBell, IconTemplate, IconLayoutDashboard, IconPalette,
-  IconSettings, IconShieldCheck, IconUsers, IconWorldWww, IconFlask2, IconAffiliate, IconWorldSearch,
+  IconSettings, IconShieldCheck, IconShieldLock, IconUsers, IconWorldWww, IconFlask2, IconAffiliate, IconWorldSearch,
 } from '@tabler/icons-react';
 import { useEffect, useId, type ComponentType, type ReactNode } from 'react';
 import { NavLink as RouterLink, useLocation } from 'react-router';
@@ -17,14 +17,14 @@ import { ThemePicker } from './ThemePicker';
 const L = {
   ru: {
     overview: 'Обзор', home: 'Главная', monitoring: 'Мониторинг', checks: 'Проверки', probes: 'Серверы и пробы', checkers: 'Агенты проверок', incidents: 'Инциденты',
-    tools: 'Инструменты', checker: 'Проверка конфигов', remnawave: 'Remnawave',
+    tools: 'Инструменты', checker: 'Проверка конфигов', remnawave: 'Remnawave', abuse: 'Антифрод',
     settings: 'Настройки', status_pages: 'Статус-страницы', users: 'Пользователи', general: 'Общие',
     theme: 'Внешний вид', alerts: 'Уведомления', rules: 'Правила', templates: 'Шаблоны',
     open_menu: 'Открыть меню', close_menu: 'Закрыть меню',
   },
   en: {
     overview: 'Overview', home: 'Dashboard', monitoring: 'Monitoring', checks: 'Checks', probes: 'Servers & probes', checkers: 'Checker agents', incidents: 'Incidents',
-    tools: 'Tools', checker: 'Config checker', remnawave: 'Remnawave',
+    tools: 'Tools', checker: 'Config checker', remnawave: 'Remnawave', abuse: 'Antifraud',
     settings: 'Settings', status_pages: 'Status pages', users: 'Users', general: 'General',
     theme: 'Appearance', alerts: 'Notifications', rules: 'Rules', templates: 'Templates',
     open_menu: 'Open the menu', close_menu: 'Close the menu',
@@ -132,6 +132,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <div className="uf-nav-section">{t('tools')}</div>
           {isAdmin && <Item to="/tools" icon={IconFlask2} label={t('checker')} onClick={close} />}
           <Item to="/remnawave" icon={IconAffiliate} label={t('remnawave')} onClick={close} />
+          {isAdmin && <Item to="/abuse" icon={IconShieldLock} label={t('abuse')} onClick={close} />}
           {isAdmin && (
             <>
               <div className="uf-nav-section">{t('alerts')}</div>

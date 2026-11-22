@@ -1,9 +1,9 @@
 import {
-  Alert, Button, Group, NumberInput, PasswordInput, Select, SimpleGrid, Skeleton, Stack, Switch, Text, TextInput,
+  Alert, Button, Group, NumberInput, PasswordInput, SegmentedControl, Select, SimpleGrid, Skeleton, Stack, Switch, TagsInput, Text, TextInput,
 } from '@mantine/core';
-import { IconAffiliate, IconCircleCheck, IconPlugConnected, IconRefresh, IconTrendingDown } from '@tabler/icons-react';
+import { IconAffiliate, IconCircleCheck, IconPlugConnected, IconRefresh, IconShieldLock, IconTrendingDown } from '@tabler/icons-react';
 import { useRef, useState } from 'react';
-import { api, ApiError, useRemnawave, type HubConfig } from '../../api';
+import { api, ApiError, useRemnawave, type AbuseRule, type HubConfig } from '../../api';
 import { confirmThen } from '../../components/guards';
 import { PageHeader } from '../../components/Misc';
 import { compactDuration, KeyValueEditor, MASK, SaveBar, SettingsCard, useSettingsDraft } from '../../components/SettingsKit';
@@ -34,6 +34,20 @@ const L = {
     prune_hint: 'Проверки ноды встают на паузу с меткой node-deleted, когда нода пропадает из панели на три опроса подряд (1,5 минуты), и снимаются с паузы, если она вернётся. Нода, пересозданная с тем же именем или адресом, не считается удалённой. Пустой ответ панели или исчезновение большинства нод сразу ничего не трогают. Серверы, токены агентов и объекты из config.yaml не меняются.',
     m15: '15 мин', m30: '30 мин', h1: '1 час', h2: '2 часа', h3: '3 часа',
     need_rw: 'Сначала подключите панель.',
+    af: 'Антифрод', af_desc: 'Раз в минуту хаб читает открытые подключения на всех нодах и считает, со скольких адресов одновременно сидит каждый клиент. Если адресов намного больше лимита устройств, приходит сообщение в Telegram. Блокировка — отдельный режим.',
+    af_mode: 'Режим', af_off: 'Выключен', af_notify: 'Уведомлять', af_ban: 'Уведомлять и блокировать',
+    af_ban_title: 'Включить автоблокировку?', af_ban_confirm: 'Включить',
+    af_ban_body: 'Клиент, у которого число адресов держится выше порога блокировки, будет отключён в панели, а его подключения оборваны. Разблокировать можно на странице «Антифрод» или в панели. Перед включением посмотрите на сообщения «был бы заблокирован» за несколько дней.',
+    af_window: 'Одновременно — это за', af_window_hint: 'Адреса, которые были в подключениях за это время',
+    af_notify_t: 'Уведомление', af_ban_t: 'Блокировка', af_k: 'Лимит ×', af_n: 'или лимит +', af_hold: 'Держится',
+    af_formula: 'Порог: больше из «лимит × {0}» и «лимит + {1}»',
+    af_example: 'Лимит 1 → {0} адр., лимит 3 → {1}, лимит 5 → {2}',
+    af_ban_note: 'В режиме уведомлений вместо блокировки приходит сообщение «был бы заблокирован».',
+    af_cooldown: 'Повторять сообщение не чаще', af_cooldown_hint: 'Раньше — только если адресов стало вдвое больше',
+    af_retention: 'Хранить адреса', af_allow_users: 'Не трогать: id пользователей', af_allow_users_hint: 'Служебные пользователи мостов и проверенные клиенты. Enter после каждого',
+    af_allow_tags: 'Не трогать: теги', af_allow_tags_hint: 'Например WHITELIST',
+    af_how: 'Адрес IPv6 считается по /64, адреса нод и мостов не считаются. Лимит устройств — из пользователя в панели, без него — общий из настроек подписки. Пользователь с лимитом 0 не проверяется. Пока панель не отвечает, отсчёт стоит на паузе.',
+    m2: '2 мин', m5: '5 мин', m10: '10 мин', h6: '6 часов', h12: '12 часов', h24: '24 часа', h48: '2 дня', d3: '3 дня', d7: '7 дней', d14: '14 дней',
   },
   en: {
     title: 'Remnawave', subtitle: 'Connect the panel with an API key, and get alerted when users leave a node',
@@ -56,6 +70,20 @@ const L = {
     prune_hint: 'A node\'s checks are paused and tagged node-deleted once it has been missing from the panel for three polls in a row (90 seconds), and resumed if it comes back. A node recreated with the same name or address does not count as deleted. An empty answer or most nodes vanishing at once changes nothing. Servers, agent tokens and objects from config.yaml are left alone.',
     m15: '15 min', m30: '30 min', h1: '1 hour', h2: '2 hours', h3: '3 hours',
     need_rw: 'Connect the panel first.',
+    af: 'Antifraud', af_desc: 'Every minute the hub reads the open connections on every node and counts how many addresses each subscriber connects from at once. When that is far over the device limit, a message goes to Telegram. Banning is a mode of its own.',
+    af_mode: 'Mode', af_off: 'Off', af_notify: 'Notify', af_ban: 'Notify and ban',
+    af_ban_title: 'Turn on automatic bans?', af_ban_confirm: 'Turn on',
+    af_ban_body: 'A subscriber whose address count stays over the ban threshold is disabled in the panel and its connections are closed. Unban on the Antifraud page or in the panel. Before turning this on, look at a few days of "would be banned" messages.',
+    af_window: '"At once" means within', af_window_hint: 'Addresses seen in the connections over this time',
+    af_notify_t: 'Notify', af_ban_t: 'Ban', af_k: 'Limit ×', af_n: 'or limit +', af_hold: 'Held for',
+    af_formula: 'Threshold: the larger of limit × {0} and limit + {1}',
+    af_example: 'Limit 1 → {0} addresses, limit 3 → {1}, limit 5 → {2}',
+    af_ban_note: 'In notify mode a "would be banned" message comes instead of the ban.',
+    af_cooldown: 'Repeat a message at most every', af_cooldown_hint: 'Sooner only if the addresses doubled',
+    af_retention: 'Keep addresses for', af_allow_users: 'Leave alone: user ids', af_allow_users_hint: 'Bridge service users and known subscribers. Enter after each',
+    af_allow_tags: 'Leave alone: tags', af_allow_tags_hint: 'E.g. WHITELIST',
+    af_how: 'IPv6 counts per /64; node and bridge addresses do not count. The device limit is the user\x27s own in the panel, else the subscription settings\x27 fallback. A user with limit 0 is not judged. While the panel does not answer, the count is paused.',
+    m2: '2 min', m5: '5 min', m10: '10 min', h6: '6 hours', h12: '12 hours', h24: '24 hours', h48: '2 days', d3: '3 days', d7: '7 days', d14: '14 days',
   },
 };
 
@@ -216,6 +244,70 @@ export default function RemnawaveSettings() {
               <Text size="xs" c="dimmed">{t('how')}</Text>
             </>
           )}
+        </SettingsCard>
+
+        <SettingsCard icon={IconShieldLock} title={t('af')} description={t('af_desc')} managed={m}>
+          {!rw ? <Text size="sm" c="dimmed">{t('need_rw')}</Text> : (() => {
+            const af = rw.abuse ?? {};
+            const mode = af.mode ?? 'notify';
+            const setAf = (fn: (a: AbuseRule) => void) => setRw((r) => { const a = { ...(r.abuse ?? {}) }; fn(a); r.abuse = a; });
+            const nt = { k: af.notify?.k ?? 3, n: af.notify?.n ?? 5, hold: compactDuration(af.notify?.hold ?? '15m') || '15m' };
+            const bt = { k: af.ban?.k ?? 5, n: af.ban?.n ?? 10, hold: compactDuration(af.ban?.hold ?? '30m') || '30m' };
+            const at = (th: { k: number; n: number }, limit: number) => Math.max(limit * th.k, limit + th.n);
+            const dur = (opts: readonly (readonly [string, string])[], cur: string) =>
+              opts.map(([v, k]): { value: string; label: string } => ({ value: v, label: t(k as 'm5') })).concat(opts.some(([v]) => v === cur) ? [] : [{ value: cur, label: cur }]);
+            const threshold = (key: 'notify' | 'ban', th: { k: number; n: number; hold: string }) => (
+              <Stack gap={6}>
+                <Text size="sm" fw={600}>{t(key === 'notify' ? 'af_notify_t' : 'af_ban_t')}</Text>
+                <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="md">
+                  <NumberInput label={t('af_k')} value={th.k} min={2} max={50} disabled={m || mode === 'off'}
+                    onChange={(v) => typeof v === 'number' && setAf((a) => { a[key] = { ...(a[key] ?? {}), k: v }; })} />
+                  <NumberInput label={t('af_n')} value={th.n} min={0} max={500} disabled={m || mode === 'off'}
+                    onChange={(v) => typeof v === 'number' && setAf((a) => { a[key] = { ...(a[key] ?? {}), n: v }; })} />
+                  <Select label={t('af_hold')} value={th.hold} allowDeselect={false} disabled={m || mode === 'off'}
+                    data={dur([['5m', 'm5'], ['10m', 'm10'], ['15m', 'm15'], ['30m', 'm30'], ['1h', 'h1'], ['2h', 'h2']], th.hold)}
+                    onChange={(v) => v && setAf((a) => { a[key] = { ...(a[key] ?? {}), hold: v }; })} />
+                </SimpleGrid>
+                <Text size="xs" c="dimmed">{t('af_formula', th.k, th.n)} · {t('af_example', at(th, 1), at(th, 3), at(th, 5))}</Text>
+              </Stack>
+            );
+            const win = compactDuration(af.window ?? '5m') || '5m';
+            const cool = compactDuration(af.cooldown ?? '24h') || '24h';
+            const keep = compactDuration(af.retention ?? '72h') || '72h';
+            return (
+              <>
+                <SegmentedControl
+                  value={mode} disabled={m} style={{ alignSelf: 'flex-start' }} maw="100%"
+                  data={[{ value: 'off', label: t('af_off') }, { value: 'notify', label: t('af_notify') }, { value: 'ban', label: t('af_ban') }]}
+                  onChange={(v) => {
+                    const apply = () => setAf((a) => { a.mode = v as AbuseRule['mode']; });
+                    if (v === 'ban') confirmThen({ title: t('af_ban_title'), body: t('af_ban_body'), confirm: t('af_ban_confirm'), cancel: c('cancel'), onConfirm: apply });
+                    else apply();
+                  }}
+                />
+                <Select label={t('af_window')} description={t('af_window_hint')} value={win} allowDeselect={false} disabled={m || mode === 'off'} maw={320}
+                  data={dur([['2m', 'm2'], ['5m', 'm5'], ['10m', 'm10'], ['15m', 'm15'], ['30m', 'm30']], win)}
+                  onChange={(v) => v && setAf((a) => { a.window = v; })} />
+                {threshold('notify', nt)}
+                {threshold('ban', bt)}
+                {mode !== 'ban' && <Text size="xs" c="dimmed">{t('af_ban_note')}</Text>}
+                <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+                  <Select label={t('af_cooldown')} description={t('af_cooldown_hint')} value={cool} allowDeselect={false} disabled={m || mode === 'off'}
+                    data={dur([['6h', 'h6'], ['12h', 'h12'], ['24h', 'h24'], ['48h', 'h48']], cool)} onChange={(v) => v && setAf((a) => { a.cooldown = v; })} />
+                  <Select label={t('af_retention')} value={keep} allowDeselect={false} disabled={m || mode === 'off'}
+                    data={dur([['24h', 'h24'], ['72h', 'd3'], ['168h', 'd7'], ['336h', 'd14']], keep)} onChange={(v) => v && setAf((a) => { a.retention = v; })} />
+                </SimpleGrid>
+                <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+                  <TagsInput label={t('af_allow_users')} description={t('af_allow_users_hint')} disabled={m}
+                    value={(af.allow_users ?? []).map(String)}
+                    onChange={(v) => setAf((a) => { const ids = v.map((x) => Number(x.trim())).filter((x) => Number.isInteger(x) && x > 0); a.allow_users = ids.length ? [...new Set(ids)] : undefined; })} />
+                  <TagsInput label={t('af_allow_tags')} description={t('af_allow_tags_hint')} disabled={m}
+                    value={af.allow_tags ?? []} onChange={(v) => setAf((a) => { a.allow_tags = v.length ? v : undefined; })} />
+                </SimpleGrid>
+                <Text size="xs" c="dimmed">{t('af_how')}</Text>
+              </>
+            );
+          })()}
         </SettingsCard>
 
         <SettingsCard icon={IconRefresh} title={t('sync')} description={t('sync_desc')} managed={m}>

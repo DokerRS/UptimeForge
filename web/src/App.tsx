@@ -15,6 +15,7 @@ const Incidents = lazy(() => import('./pages/Incidents'));
 const Tools = lazy(() => import('./pages/Tools'));
 const Checkers = lazy(() => import('./pages/Checkers'));
 const Remnawave = lazy(() => import('./pages/Remnawave'));
+const Abuse = lazy(() => import('./pages/Abuse'));
 const Notifications = lazy(() => import('./pages/settings/Notifications'));
 const Templates = lazy(() => import('./pages/settings/Templates'));
 const Telegram = lazy(() => import('./pages/settings/Telegram'));
@@ -73,6 +74,7 @@ export function App() {
               <Route path="/incidents" element={<Incidents />} />
               <Route path="/tools" element={<Tools />} />
               <Route path="/remnawave" element={<Remnawave />} />
+              <Route path="/abuse" element={<Abuse />} />
               <Route path="/settings/telegram" element={<Telegram />} />
               <Route path="/settings/remnawave" element={<RemnawaveSettings />} />
               <Route path="/settings/notifications" element={<Notifications />} />

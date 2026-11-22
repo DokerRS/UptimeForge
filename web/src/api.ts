@@ -192,7 +192,7 @@ export interface HubConfig {
   templates?: Record<string, Record<string, string>>;
   telegram?: { token: string; chat_id: number; topics?: Record<string, number>; routes?: Record<string, TelegramRoute>; rules?: TelegramRule[]; api_url?: string; proxy?: string; admins?: number[] } | null;
   webhook?: { url: string; headers?: Record<string, string>; secret?: string } | null;
-  remnawave?: { url: string; token: string; headers?: Record<string, string> ; drop?: { off?: boolean; percent?: number; min_users?: number; window?: string }; prune?: boolean } | null;
+  remnawave?: { url: string; token: string; headers?: Record<string, string> ; drop?: { off?: boolean; percent?: number; min_users?: number; window?: string }; prune?: boolean; abuse?: AbuseRule } | null;
 }
 
 export interface Settings { config: HubConfig; managed: Record<string, boolean> }
@@ -566,3 +566,26 @@ export function useApiMutation<TBody, TOut = unknown>(method: string, path: (b: 
     onSuccess: () => qc.invalidateQueries(),
   });
 }
+
+/** remnawave.abuse: the antifraud by client addresses. Empty fields take the hub's defaults. */
+export interface AbuseThreshold { k?: number; n?: number; hold?: string }
+export interface AbuseRule {
+  mode?: 'off' | 'notify' | 'ban'; window?: string; notify?: AbuseThreshold; ban?: AbuseThreshold;
+  cooldown?: string; retention?: string; allow_users?: number[]; allow_tags?: string[];
+}
+export interface AbuseUser { id: number; username?: string; telegram_id?: number; limit: number; status?: string; tag?: string }
+export interface AbuseEvent { at: string; user: number; username?: string; action: string; now: number; day: number; limit: number; nodes: string[]; error?: string }
+export interface AbuseRow {
+  user: AbuseUser; limit: number; now: number; day: number; nodes: string[] | null; level: 'ok' | 'notify' | 'ban';
+  since?: string; banned_at?: string; last_event?: AbuseEvent;
+}
+export interface AbuseView {
+  coverage: { mode: string; at?: string; nodes: number; answered: number; error?: string; users: number };
+  rows: AbuseRow[];
+}
+export interface AbuseSeen { user: number; prefix: string; first: string; last: string; nodes: string[] }
+export interface AbuseUserView { user: AbuseUser; state: { level?: string; notify_since?: string; banned_at?: string }; addresses: AbuseSeen[]; events: AbuseEvent[] }
+
+export const useAbuse = () => useQuery({ queryKey: ['abuse'], queryFn: () => api<AbuseView>('GET', '/api/v1/abuse'), refetchInterval: 30_000 });
+export const useAbuseUser = (id: number | null) =>
+  useQuery({ enabled: id != null, queryKey: ['abuse', id], queryFn: () => api<AbuseUserView>('GET', `/api/v1/abuse/${id}`) });

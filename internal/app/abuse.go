@@ -56,6 +56,13 @@ type AbuseCoverage struct {
 }
 
 func (a *App) pollAbuse(ctx context.Context) {
+	// The first round waits for the panel's node list (pollRemnawave starts at once).
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(20 * time.Second):
+		a.abuseRound(ctx, time.Now().UTC())
+	}
 	t := time.NewTicker(abusePoll)
 	defer t.Stop()
 	for {

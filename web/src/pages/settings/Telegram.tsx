@@ -40,6 +40,7 @@ const L = {
     e_partial: '🟡 Частично', d_partial: 'сбой у части проб', e_subscription: '📡 Подписка', d_subscription: 'хаб не может скачать подписку',
     e_probe_offline: '🔌 Сервер офлайн', d_probe_offline: 'агент не на связи с хабом или нода с панелью Remnawave', e_probe_no_net: '🛰 Нет интернета', d_probe_no_net: 'у сервера пропал интернет', e_host: '📈 Порог метрики', d_host: 'ЦП, память, диск, steal или iowait дольше порога',
     g_rw: 'Remnawave', e_users_drop: '📉 Ушли пользователи', d_users_drop: 'онлайн на ноде резко упал: похоже на бан ТСПУ',
+    e_abuse: '🚨 Антифрод', d_abuse: 'клиент сидит с намного большего числа адресов, чем лимит устройств',
     e_resolved: '🟢 Восстановление', d_resolved: 'проблема ушла', e_remind: '⏰ Напоминание', d_remind: 'никто не принял инцидент', e_report: '📊 Недельный отчёт', d_report: 'воскресенье, по умолчанию 20:00',
     other_rules: 'Тихие часы и частота напоминаний настраиваются в разделе', rules: 'Правила', lang_note: 'Язык сообщений меняется в разделе', general: 'Общие',
     advanced: 'Если Telegram недоступен с сервера', api_url: 'Адрес Bot API', api_url_hint: 'Свой Bot API-сервер или зеркало', proxy: 'Прокси', proxy_hint: 'Через него хаб ходит в Telegram',
@@ -71,6 +72,7 @@ const L = {
     e_partial: '🟡 Partial', d_partial: 'fails from some probes', e_subscription: '📡 Subscription', d_subscription: 'the hub cannot download it',
     e_probe_offline: '🔌 Server offline', d_probe_offline: 'the agent lost the hub, or the Remnawave panel lost a node', e_probe_no_net: '🛰 No internet', d_probe_no_net: 'the server lost internet', e_host: '📈 Metric threshold', d_host: 'CPU, memory, disk, steal or iowait past the threshold',
     g_rw: 'Remnawave', e_users_drop: '📉 Users gone', d_users_drop: 'users online on a node collapsed: looks like a DPI ban',
+    e_abuse: '🚨 Antifraud', d_abuse: 'a subscriber connects from far more addresses than its device limit',
     e_resolved: '🟢 Recovery', d_resolved: 'the problem is gone', e_remind: '⏰ Reminder', d_remind: 'nobody acknowledged the incident', e_report: '📊 Weekly report', d_report: 'Sunday, 20:00 by default',
     other_rules: 'Quiet hours and reminder frequency are in', rules: 'Rules', lang_note: 'The message language is in', general: 'General',
     advanced: 'If Telegram is unreachable from the server', api_url: 'Bot API URL', api_url_hint: 'Your own Bot API server or a mirror', proxy: 'Proxy', proxy_hint: 'The hub reaches Telegram through it',
@@ -84,7 +86,7 @@ type FoundChat = { id: number; title: string; type: string; topics?: { id: numbe
 const GROUPS = [
   { key: 'g_problems', events: ['down', 'blocked', 'partial', 'subscription'] },
   { key: 'g_servers', events: ['probe_offline', 'probe_no_net', 'host'] },
-  { key: 'g_rw', events: ['users_drop'] },
+  { key: 'g_rw', events: ['users_drop', 'abuse'] },
   { key: 'g_flow', events: ['resolved', 'remind', 'report'] },
 ] as const;
 

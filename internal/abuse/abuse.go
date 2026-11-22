@@ -136,11 +136,11 @@ func Normalize(ip string, nodes map[string]bool) (string, bool) {
 // Seen is one address of one user: when it was first and last in a node's
 // list of open connections, and on which nodes.
 type Seen struct {
-	User   int64
-	Prefix string
-	First  time.Time
-	Last   time.Time
-	Nodes  []string
+	User   int64     `json:"user"`
+	Prefix string    `json:"prefix"`
+	First  time.Time `json:"first"`
+	Last   time.Time `json:"last"`
+	Nodes  []string  `json:"nodes"`
 }
 
 // Tracker holds the addresses seen per user.
@@ -250,7 +250,9 @@ func (t *Tracker) Addresses(user int64) []Seen {
 		c.Nodes = slices.Clone(s.Nodes)
 		out = append(out, c)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Last.After(out[j].Last) })
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Last.After(out[j].Last) || (out[i].Last.Equal(out[j].Last) && out[i].Prefix < out[j].Prefix)
+	})
 	return out
 }
 
@@ -299,9 +301,9 @@ type State struct {
 type Verdict struct {
 	User   User
 	Limit  int
-	Now    int // addresses at once (inside the window)
-	Day    int // addresses over 24 hours
-	Nodes  []string
+	Now    int      // addresses at once (inside the window)
+	Day    int      // addresses over 24 hours
+	Nodes  []string `json:"nodes"`
 	Level  Level
 	Since  time.Time
 	Action Action
