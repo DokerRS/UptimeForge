@@ -55,7 +55,7 @@ const (
 )
 
 // Events lists every routable event.
-var Events = []string{EventDown, EventBlocked, EventPartial, EventProbeOffline, EventProbeNoNet, EventSubscription, EventHost, EventUsersDrop, EventResolved, EventRemind, EventReport}
+var Events = []string{EventDown, EventBlocked, EventPartial, EventProbeOffline, EventProbeNoNet, EventSubscription, EventHost, EventUsersDrop, EventAbuse, EventResolved, EventRemind, EventReport}
 
 // Route says where one kind of event goes. Zero values mean the main chat, no
 // topic, on, with sound.
