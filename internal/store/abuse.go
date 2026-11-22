@@ -29,24 +29,17 @@ func (s *Store) WriteAbuseSeen(ctx context.Context, seen []abuse.Seen) error {
 	if len(seen) == 0 {
 		return nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
+	users, prefixes, nodes := make([]int64, len(seen)), make([]string, len(seen)), make([]string, len(seen))
+	first, last := make([]time.Time, len(seen)), make([]time.Time, len(seen))
+	for i, x := range seen {
+		users[i], prefixes[i], first[i], last[i], nodes[i] = x.User, x.Prefix, x.First, x.Last, jsonList(x.Nodes)
 	}
-	defer tx.Rollback()
-	st, err := tx.PrepareContext(ctx, `INSERT INTO abuse_ips (user_id, prefix, first_seen, last_seen, nodes) VALUES ($1, $2, $3, $4, $5)
+	// One statement for a whole poll: a big node has a thousand users online.
+	_, err := s.db.ExecContext(ctx, `INSERT INTO abuse_ips (user_id, prefix, first_seen, last_seen, nodes)
+		SELECT u, p, f, l, n::jsonb FROM unnest($1::bigint[], $2::text[], $3::timestamptz[], $4::timestamptz[], $5::text[]) AS x(u, p, f, l, n)
 		ON CONFLICT (user_id, prefix) DO UPDATE SET first_seen = LEAST(abuse_ips.first_seen, excluded.first_seen),
-		last_seen = GREATEST(abuse_ips.last_seen, excluded.last_seen), nodes = excluded.nodes`)
-	if err != nil {
-		return err
-	}
-	defer st.Close()
-	for _, x := range seen {
-		if _, err := st.ExecContext(ctx, x.User, x.Prefix, x.First, x.Last, jsonList(x.Nodes)); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
+		last_seen = GREATEST(abuse_ips.last_seen, excluded.last_seen), nodes = excluded.nodes`, users, prefixes, first, last, nodes)
+	return err
 }
 
 // LoadAbuseSeen reads the addresses seen after since.
@@ -72,6 +65,14 @@ func (s *Store) LoadAbuseSeen(ctx context.Context, since time.Time) ([]abuse.See
 
 // SaveAbuseStates replaces the remembered per-user states.
 func (s *Store) SaveAbuseStates(ctx context.Context, states map[int64]abuse.State) error {
+	ids, docs := make([]int64, 0, len(states)), make([]string, 0, len(states))
+	for id, st := range states {
+		b, err := json.Marshal(st)
+		if err != nil {
+			return err
+		}
+		ids, docs = append(ids, id), append(docs, string(b))
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -80,12 +81,8 @@ func (s *Store) SaveAbuseStates(ctx context.Context, states map[int64]abuse.Stat
 	if _, err := tx.ExecContext(ctx, `DELETE FROM abuse_state`); err != nil {
 		return err
 	}
-	for id, st := range states {
-		b, err := json.Marshal(st)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO abuse_state (user_id, state) VALUES ($1, $2)`, id, b); err != nil {
+	if len(ids) > 0 {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO abuse_state (user_id, state) SELECT u, s::jsonb FROM unnest($1::bigint[], $2::text[]) AS x(u, s)`, ids, docs); err != nil {
 			return err
 		}
 	}
