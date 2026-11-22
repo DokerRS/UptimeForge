@@ -63,6 +63,7 @@ type App struct {
 	wh        *notify.Webhook
 	rec       *recorder
 	rw        remnawaveState
+	abuse     abuseRun
 	nodes     nodeSnapshot
 	addrs     nodeAddrs // what the nodes' host names resolve to
 	geo       geoDB
@@ -329,10 +330,11 @@ func (a *App) Run(ctx context.Context) error {
 	a.mu.Unlock()
 
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(5)
 	go func() { defer wg.Done(); a.rec.run(ctx, a.Store, a.Log) }()
 	go func() { defer wg.Done(); a.keepGeo(ctx, sleepCtx) }()
 	go func() { defer wg.Done(); a.pollRemnawave(ctx) }()
+	go func() { defer wg.Done(); a.pollAbuse(ctx) }()
 	go func() { defer wg.Done(); a.reportLoop(ctx) }()
 	err := a.Hub.Run(ctx)
 	wg.Wait()

@@ -177,7 +177,7 @@ CREATE TABLE sys_5m (
 	load1_sum DOUBLE PRECISION, load5_sum DOUBLE PRECISION, load15_sum DOUBLE PRECISION, PRIMARY KEY (probe, ts));
 CREATE INDEX sys_5m_ts ON sys_5m (ts);
 CREATE TABLE sys_1h (LIKE sys_5m INCLUDING ALL);
-`, sysExtMigration, nodeUsersMigration, prefsMigration, latNMigration, incidentsEndsMigration}
+`, sysExtMigration, nodeUsersMigration, prefsMigration, latNMigration, incidentsEndsMigration, abuseMigration}
 
 // Hubs racing to migrate the same database take turns on this lock.
 const migrateLock = 0x75667472 // "uftr"

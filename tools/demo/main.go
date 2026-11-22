@@ -33,6 +33,7 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
+	"github.com/wh3r3ar3you/uptimeforge/internal/abuse"
 	"github.com/wh3r3ar3you/uptimeforge/internal/agent"
 	"github.com/wh3r3ar3you/uptimeforge/internal/api"
 	"github.com/wh3r3ar3you/uptimeforge/internal/app"
@@ -99,10 +100,11 @@ func main() {
 	remind := checks.Duration(30 * time.Minute)
 	must(a.SaveSettings(ctx, hub.Config{
 		Timezone: "Europe/Moscow", Lang: "ru", RegionLabel: "country",
-		Alerts:    hub.Alerts{QuietHours: "01:00-08:00", RemindEvery: &remind},
-		Telegram:  &hub.Telegram{Token: "1:demo", ChatID: -1001, APIURL: tg.URL},
-		Remnawave: &hub.Remnawave{URL: rw.URL, Token: "demo"},
-		Baseline:  []checks.Spec{{Type: "tcp", TCP: &checks.TCPParams{Address: tcpOK}}},
+		Alerts:   hub.Alerts{QuietHours: "01:00-08:00", RemindEvery: &remind},
+		Telegram: &hub.Telegram{Token: "1:demo", ChatID: -1001, APIURL: tg.URL},
+		Remnawave: &hub.Remnawave{URL: rw.URL, Token: "demo", Abuse: &abuse.Rule{ // short holds so the demo shows results within minutes
+			Notify: &abuse.Threshold{Hold: checks.Duration(5 * time.Minute)}, Ban: &abuse.Threshold{Hold: checks.Duration(10 * time.Minute)}}},
+		Baseline: []checks.Spec{{Type: "tcp", TCP: &checks.TCPParams{Address: tcpOK}}},
 	}))
 
 	via := "socks5://" + dpi
@@ -484,6 +486,18 @@ func fakeRemnawave() http.Handler {
 {"rss":439820000,"heapUsed":120000000,"heapTotal":160000000,"external":1,"arrayBuffers":1,"eventLoopDelayMs":0.23,"eventLoopP99Ms":1.2,"activeHandles":10,"uptime":3456,"pid":1,"timestamp":1792744800123,"instanceId":"0","instanceType":"api"},
 {"rss":157450000,"heapUsed":60000000,"heapTotal":80000000,"external":1,"arrayBuffers":1,"eventLoopDelayMs":0.21,"eventLoopP99Ms":1.1,"activeHandles":8,"uptime":3456,"pid":2,"timestamp":1792744800123,"instanceId":"0","instanceType":"scheduler"},
 {"rss":512000000,"heapUsed":148000000,"heapTotal":190000000,"external":1,"arrayBuffers":1,"eventLoopDelayMs":0.25,"eventLoopP99Ms":1.3,"activeHandles":12,"uptime":3456,"pid":3,"timestamp":1792744800123,"instanceId":"0","instanceType":"processor"}]}}`)
+		case "/api/users":
+			// Three subscribers for the antifraud: one subscription shared far and
+			// wide, a family within its limit, and two phones over a limit of one.
+			io.WriteString(w, `{"response":{"total":3,"users":[
+{"id":1001,"username":"shared_sub","telegramId":777000111,"status":"ACTIVE","tag":null,"hwidDeviceLimit":1,"vlessUuid":"00000000-0000-4000-8000-000000000001"},
+{"id":1002,"username":"family","telegramId":null,"status":"ACTIVE","tag":null,"hwidDeviceLimit":3},
+{"id":1003,"username":"two_phones","telegramId":777000333,"status":"ACTIVE","tag":null,"hwidDeviceLimit":1}]}}`)
+		case "/api/subscription-settings":
+			io.WriteString(w, `{"response":{"hwidSettings":{"enabled":true,"fallbackDeviceLimit":5,"maxDevicesAnnounce":null}}}`)
+		case "/api/connections/drop":
+			w.WriteHeader(http.StatusAccepted)
+			io.WriteString(w, `{"response":{"eventSent":true}}`)
 		case "/api/bandwidth-stats/nodes":
 			var top []string
 			for i, n := range nodes {
@@ -492,7 +506,34 @@ func fakeRemnawave() http.Handler {
 			fmt.Fprintf(w, `{"response":{"categories":["2026-10-17","2026-10-18","2026-10-19","2026-10-20","2026-10-21","2026-10-22","2026-10-23"],
 "sparklineData":[1,2,3,4,5,6,7],"topNodes":[%s],"series":[]}}`, strings.Join(top, ","))
 		default:
-			http.NotFound(w, r)
+			p := r.URL.Path
+			switch {
+			case r.Method == http.MethodPost && strings.HasPrefix(p, "/api/connections/by-node/"):
+				fmt.Fprintf(w, `{"response":{"jobId":"job-%s"}}`, strings.TrimPrefix(p, "/api/connections/by-node/"))
+			case strings.HasPrefix(p, "/api/connections/by-node/job-"):
+				// shared_sub sits on two nodes from 14 addresses, family on one from 4.
+				var users []string
+				ips := func(n, base int) string {
+					var l []string
+					for i := range n {
+						l = append(l, fmt.Sprintf(`{"ip":"91.%d.%d.%d","lastSeen":"2026-11-20T10:00:00Z"}`, 100+base, i/50, i%250+1))
+					}
+					return strings.Join(l, ",")
+				}
+				switch {
+				case strings.HasSuffix(p, "000000000001"):
+					users = append(users, `{"userId":1001,"ips":[`+ips(8, 1)+`]}`, `{"userId":1002,"ips":[`+ips(4, 2)+`]}`)
+				case strings.HasSuffix(p, "000000000002"):
+					users = append(users, `{"userId":1001,"ips":[`+ips(6, 3)+`]}`)
+				case strings.HasSuffix(p, "000000000007"):
+					users = append(users, `{"userId":1003,"ips":[`+ips(7, 4)+`]}`)
+				}
+				fmt.Fprintf(w, `{"response":{"isCompleted":true,"isFailed":false,"result":{"success":true,"nodeUuid":"x","users":[%s]}}}`, strings.Join(users, ","))
+			case r.Method == http.MethodPost && strings.HasPrefix(p, "/api/users/") && (strings.HasSuffix(p, "/actions/disable") || strings.HasSuffix(p, "/actions/enable")):
+				io.WriteString(w, `{"response":{}}`)
+			default:
+				http.NotFound(w, r)
+			}
 		}
 	})
 }

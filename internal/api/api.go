@@ -135,6 +135,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/templates/test", admin(s.testTemplate))
 	mux.Handle("GET /api/v1/remnawave", view(s.remnawave))
 	mux.Handle("GET /api/v1/remnawave/users", view(s.remnawaveUsers))
+	// The antifraud shows client addresses: admins only.
+	mux.Handle("GET /api/v1/abuse", admin(s.abuseList))
+	mux.Handle("GET /api/v1/abuse/{id}", admin(s.abuseUser))
+	mux.Handle("POST /api/v1/abuse/{id}/enable", admin(s.abuseEnable))
+	mux.Handle("POST /api/v1/abuse/{id}/allow", admin(s.abuseAllow))
 
 	mux.Handle("GET /api/v1/users", admin(s.listUsers))
 	mux.Handle("POST /api/v1/users", admin(s.createUser))
