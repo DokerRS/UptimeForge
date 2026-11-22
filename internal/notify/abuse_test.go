@@ -9,9 +9,9 @@ import (
 
 func TestAbuseNoticeText(t *testing.T) {
 	n := AbuseNotice{Action: "notify", UserID: 7, Username: "save<oleshki>", TelegramID: 8620400077, Limit: 1, Now: 16, Day: 58,
-		Nodes: []string{"de-1", "nl-2"}, Operators: []string{"MTS", "Beeline"}}
+		Nodes: []string{"de-1", "nl-2"}, Operators: []AbuseOperator{{"MTS", 10}, {"Beeline", 6}}}
 	ru := (&Formatter{Lang: "ru"}).Abuse(n)
-	for _, want := range []string{"Антифрод", "<code>7</code>", "save&lt;oleshki&gt;", "8620400077", "Лимит устройств: 1", "сейчас: <b>16</b>", "за 24 ч: 58", "de-1, nl-2", "MTS, Beeline"} {
+	for _, want := range []string{"Антифрод", "<code>7</code>", "save&lt;oleshki&gt;", "8620400077", "Лимит устройств: 1", "сейчас: <b>16</b>", "за 24 ч: 58", "de-1, nl-2", "MTS · 10, Beeline · 6"} {
 		if !strings.Contains(ru, want) {
 			t.Errorf("ru text has no %q:\n%s", want, ru)
 		}
@@ -62,7 +62,7 @@ func TestAbuseHasATestMessage(t *testing.T) {
 // The message lists the addresses with their provider, so the admin sees at
 // a glance whether it is one phone hopping inside one operator or a crowd.
 func TestAbuseNoticeListsAddresses(t *testing.T) {
-	n := AbuseNotice{Action: "notify", UserID: 7, Limit: 1, Now: 25, Operators: []string{"MTS · 20", "Beeline · 5"}}
+	n := AbuseNotice{Action: "notify", UserID: 7, Limit: 1, Now: 25, Operators: []AbuseOperator{{"MTS", 20}, {"Beeline", 5}}}
 	for i := range 25 {
 		n.Addresses = append(n.Addresses, AbuseAddress{IP: fmt.Sprintf("83.1.0.%d", i+1), ASN: "as8359", Org: "MTS <PJSC>"})
 	}
@@ -77,5 +77,44 @@ func TestAbuseNoticeListsAddresses(t *testing.T) {
 	}
 	if len(s) > 4000 {
 		t.Errorf("a message of %d characters may not fit Telegram", len(s))
+	}
+}
+
+// The antifraud card is a rich message: a heading, a table of facts, the
+// operators, the addresses folded away, and the plain HTML as the fallback.
+func TestAbuseRichCard(t *testing.T) {
+	n := AbuseNotice{Action: "would_ban", UserID: 3038, Username: "sale<s>", TelegramID: 8620400077, Limit: 2, Now: 17, Day: 40,
+		Nodes: []string{"DE-1", "NL-2"}, Operators: []AbuseOperator{{"MTS PJSC", 12}, {"Beeline", 5}}}
+	for i := range 17 {
+		n.Addresses = append(n.Addresses, AbuseAddress{IP: fmt.Sprintf("83.1.0.%d", i+1), ASN: "as8359", Org: "MTS PJSC"})
+	}
+	s := (&Formatter{Lang: "ru"}).RichAbuse(n)
+	for _, want := range []string{
+		"<h3>⛔ Антифрод · был бы заблокирован</h3>", "<table", "👤", "<code>3038</code>", "sale&lt;s&gt;", "📱", ">2<", "🌐", "<b>17</b>",
+		"🕓", ">40<", "🖥", "DE-1, NL-2", "📡", "MTS PJSC", ">12<", "<details><summary>🌍 Адреса (17)</summary>", "<code>83.1.0.17</code>", "AS8359", "<footer>",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("no %q in:\n%s", want, s)
+		}
+	}
+
+	tg, calls := fakeBot(t, TelegramConfig{})
+	if err := tg.NotifyAbuse(context.Background(), n); err != nil {
+		t.Fatal(err)
+	}
+	if c := calls(); len(c) != 1 || !c[0].rich || !strings.Contains(c[0].text, "<table") {
+		t.Fatalf("not sent as a rich card: %+v", c)
+	}
+}
+
+// The Test button of the abuse route sends a sample card, so its look can
+// be judged before anyone trips the antifraud.
+func TestAbuseTestIsASampleCard(t *testing.T) {
+	tg, calls := fakeBot(t, TelegramConfig{})
+	if err := tg.SendTest(context.Background(), EventAbuse); err != nil {
+		t.Fatal(err)
+	}
+	if c := calls(); len(c) != 1 || !c[0].rich || !strings.Contains(c[0].text, "<table") || !strings.Contains(c[0].text, "203.0.113.") {
+		t.Fatalf("calls %+v", c)
 	}
 }

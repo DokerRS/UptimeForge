@@ -345,7 +345,7 @@ func TestAbuseNoticeHasAddressesAndProviders(t *testing.T) {
 	if len(n.Addresses) != 8 || n.Addresses[0].IP == "" || n.Addresses[0].Org != "MTS PJSC" || n.Addresses[0].ASN != "as8359" {
 		t.Fatalf("addresses %+v", n.Addresses)
 	}
-	if len(n.Operators) != 1 || n.Operators[0] != "MTS PJSC · 8" {
+	if len(n.Operators) != 1 || n.Operators[0] != (notify.AbuseOperator{Name: "MTS PJSC", Count: 8}) {
 		t.Fatalf("operators %v", n.Operators)
 	}
 	v, _ := a.AbuseUser(context.Background(), 7)

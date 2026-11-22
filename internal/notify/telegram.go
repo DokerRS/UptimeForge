@@ -689,6 +689,11 @@ func (t *Telegram) SendTest(ctx context.Context, event string) error {
 		return fmt.Errorf("unknown event %q", event)
 	}
 	to := t.route(event, nil)
+	if event == EventAbuse { // a sample card shows what the real ones look like
+		n := SampleAbuse()
+		_, err := t.sendCard(ctx, to, t.f.RichAbuse(n), t.f.Abuse(n), false, nil)
+		return err
+	}
 	if !t.richOff.Load() {
 		p := map[string]any{"chat_id": to.chat, "rich_message": map[string]any{"html": t.f.RichTest(event)}}
 		if to.topic != 0 {
