@@ -583,7 +583,7 @@ export interface AbuseView {
   coverage: { mode: string; at?: string; nodes: number; answered: number; error?: string; users: number };
   rows: AbuseRow[];
 }
-export interface AbuseSeen { user: number; prefix: string; first: string; last: string; nodes: string[] }
+export interface AbuseSeen { user: number; prefix: string; first: string; last: string; nodes: string[]; asn?: string; org?: string }
 export interface AbuseUserView { user: AbuseUser; state: { level?: string; notify_since?: string; banned_at?: string; ban_failed?: boolean }; addresses: AbuseSeen[]; events: AbuseEvent[] }
 
 export const useAbuse = () => useQuery({ queryKey: ['abuse'], queryFn: () => api<AbuseView>('GET', '/api/v1/abuse'), refetchInterval: 30_000 });

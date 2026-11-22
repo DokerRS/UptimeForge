@@ -304,3 +304,61 @@ func TestLookupOnlyAndPrepare(t *testing.T) {
 		t.Fatalf("Prepare must refresh stale databases: %v", err)
 	}
 }
+
+// DB-IP puts out a database a month. Prepare runs daily: early in a month it
+// falls back to last month's file, and picks the new one up the first day
+// it is out, not 35 days after the last download. A check that finds
+// nothing new downloads nothing, and is not repeated within the day.
+func TestNewMonthIsPickedUpTheDayItIsOut(t *testing.T) {
+	var hits atomic.Int32
+	months := map[string]string{"2026-10": "de"}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		p := strings.TrimPrefix(r.URL.Path, "/")
+		if m, asn := strings.CutPrefix(p, "asn-"); asn {
+			if _, ok := months[m]; ok {
+				w.Write(gz("8359 MTS PJSC"))
+				return
+			}
+			http.NotFound(w, r)
+			return
+		}
+		cc, ok := months[p]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write(gz(cc))
+	}))
+	defer srv.Close()
+	now := time.Date(2026, 11, 1, 6, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	d := &DB{Dir: dir, URL: func(m time.Time) string { return srv.URL + "/" + m.Format("2006-01") }, Now: func() time.Time { return now },
+		LookupOnly: true, open: openFake, openASN: openFakeASN, ASNURL: func(m time.Time) string { return srv.URL + "/asn-" + m.Format("2006-01") }}
+	ctx := context.Background()
+	ip := netip.MustParseAddr("203.0.113.7")
+	d.Prepare(ctx) // November is not out: October it is
+	if cc, _ := d.Country(ctx, ip); cc != "de" {
+		t.Fatalf("first: %q", cc)
+	}
+	h := hits.Load()
+	now = now.Add(time.Hour)
+	d.Prepare(ctx)
+	if hits.Load() != h {
+		t.Fatalf("checked again within the day: %d requests", hits.Load()-h)
+	}
+	now = now.Add(24 * time.Hour) // November 2: still not out
+	d.Prepare(ctx)
+	if n := hits.Load() - h; n != 2 {
+		t.Fatalf("a daily check asks for this month only (country and ASN), got %d requests", n)
+	}
+	months["2026-11"] = "nl"
+	now = now.Add(24 * time.Hour) // November 3: it is out
+	d.Prepare(ctx)
+	if cc, _ := d.Country(ctx, ip); cc != "nl" {
+		t.Fatalf("the new month was not picked up: %q", cc)
+	}
+	if _, err := os.Stat(dir + "/dbip-country-2026-10.mmdb"); !os.IsNotExist(err) {
+		t.Fatal("the old file is kept")
+	}
+}

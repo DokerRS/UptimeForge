@@ -516,7 +516,7 @@ func fakeRemnawave() http.Handler {
 				ips := func(n, base int) string {
 					var l []string
 					for i := range n {
-						l = append(l, fmt.Sprintf(`{"ip":"91.%d.%d.%d","lastSeen":"2026-11-20T10:00:00Z"}`, 100+base, i/50, i%250+1))
+						l = append(l, fmt.Sprintf(`{"ip":"91.%d.%d.%d","lastSeen":%q}`, 100+base, i/50, i%250+1, time.Now().UTC().Format(time.RFC3339)))
 					}
 					return strings.Join(l, ",")
 				}
