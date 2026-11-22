@@ -108,6 +108,7 @@ func (a *App) abuseRound(ctx context.Context, at time.Time) {
 	}
 	c, _ := a.abuseClient()
 	a.abuseLoad(ctx, at, rule)
+	a.wantGeo() // the operators of the addresses come from the hub's offline GeoIP database
 
 	// The user directory and the fallback limit change slowly.
 	r.mu.Lock()
@@ -326,7 +327,7 @@ func (a *App) abuseAct(ctx context.Context, c *remnawave.Client, at time.Time, v
 		}
 		cancel()
 	}
-	n.Operators = a.abuseOperators(ctx, v.User.ID, at)
+	n.Addresses, n.Operators = a.abuseAddresses(ctx, v.User.ID, at)
 	if err := a.Store.AddAbuseEvent(ctx, store.AbuseEvent{At: at, User: v.User.ID, Username: v.User.Username, Action: string(v.Action),
 		Now: v.Now, Day: v.Day, Limit: v.Limit, Nodes: v.Nodes, Error: n.Error}); err != nil {
 		a.Log.Warn("antifraud: store an event", "err", err)
@@ -346,42 +347,59 @@ func (a *App) abuseAct(ctx context.Context, c *remnawave.Client, at time.Time, v
 	}
 }
 
-// abuseOperators names the networks the user's current addresses belong to,
-// the three most frequent, from the hub's GeoIP database when it has one.
-func (a *App) abuseOperators(ctx context.Context, user int64, at time.Time) []string {
-	if a.geo == nil {
-		return nil
-	}
+// abuseAddresses lists the user's addresses inside the window with the
+// operator of each, from the hub's offline GeoIP database (nothing is sent
+// anywhere), and the operators with how many addresses each, most first.
+func (a *App) abuseAddresses(ctx context.Context, user int64, at time.Time) ([]notify.AbuseAddress, []string) {
 	a.abuse.mu.Lock()
 	window := a.Hub.Config().Remnawave.Abuse.Effective().Window.D()
 	seen := a.abuse.tr.Addresses(user)
 	a.abuse.mu.Unlock()
+	var out []notify.AbuseAddress
 	count := map[string]int{}
-	lookups := 0
 	for _, s := range seen {
-		if !s.Last.After(at.Add(-window)) || lookups >= 20 {
+		if !s.Last.After(at.Add(-window)) {
 			continue
 		}
-		ip, err := netip.ParseAddr(strings.TrimSuffix(s.Prefix, "/64"))
-		if err != nil {
-			continue
+		x := notify.AbuseAddress{IP: s.Prefix}
+		if len(out) < abuseMaxLookups {
+			x.ASN, x.Org = a.abuseNetwork(ctx, s.Prefix)
 		}
-		lookups++
-		lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		netw, err := a.geo.Network(lctx, ip)
-		cancel()
-		if err == nil && netw.Org != "" {
-			count[netw.Org]++
+		if x.Org != "" {
+			count[x.Org]++
 		}
+		out = append(out, x)
 	}
-	names := make([]string, 0, len(count))
-	for k := range count {
-		names = append(names, k)
-	}
+	names := slices.Collect(maps.Keys(count))
 	sort.Slice(names, func(i, j int) bool {
 		return count[names[i]] > count[names[j]] || (count[names[i]] == count[names[j]] && names[i] < names[j])
 	})
-	return names[:min(len(names), 3)]
+	ops := make([]string, 0, min(len(names), 5))
+	for _, n := range names[:min(len(names), 5)] {
+		ops = append(ops, fmt.Sprintf("%s · %d", n, count[n]))
+	}
+	return out, ops
+}
+
+// abuseMaxLookups bounds the GeoIP lookups of one message.
+const abuseMaxLookups = 50
+
+// abuseNetwork is the operator of an address or an IPv6 /64.
+func (a *App) abuseNetwork(ctx context.Context, prefix string) (asn, org string) {
+	if a.geo == nil {
+		return "", ""
+	}
+	ip, err := netip.ParseAddr(strings.TrimSuffix(prefix, "/64"))
+	if err != nil {
+		return "", ""
+	}
+	lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	n, err := a.geo.Network(lctx, ip)
+	if err != nil {
+		return "", ""
+	}
+	return n.ASN, n.Org
 }
 
 // nodeIPsOf is every address a node is known by: the panel's list and its
@@ -463,26 +481,41 @@ func (a *App) Abuse(ctx context.Context) AbuseView {
 	return view
 }
 
+// AbuseAddress is one address of a subscriber with its operator.
+type AbuseAddress struct {
+	abuse.Seen
+	ASN string `json:"asn,omitempty"`
+	Org string `json:"org,omitempty"`
+}
+
 // AbuseUserView is one subscriber's addresses and history, for admins only.
 type AbuseUserView struct {
 	User      abuse.User         `json:"user"`
 	State     abuse.State        `json:"state"`
-	Addresses []abuse.Seen       `json:"addresses"`
+	Addresses []AbuseAddress     `json:"addresses"`
 	Events    []store.AbuseEvent `json:"events"`
 }
 
 func (a *App) AbuseUser(ctx context.Context, id int64) (AbuseUserView, error) {
 	r := &a.abuse
 	r.mu.Lock()
-	v := AbuseUserView{User: abuse.User{ID: id}, Addresses: []abuse.Seen{}}
+	v := AbuseUserView{User: abuse.User{ID: id}, Addresses: []AbuseAddress{}}
 	if u, ok := r.users[id]; ok {
 		v.User = u
 	}
 	v.State = r.states[id]
+	var seen []abuse.Seen
 	if r.tr != nil {
-		v.Addresses = r.tr.Addresses(id)
+		seen = r.tr.Addresses(id)
 	}
 	r.mu.Unlock()
+	for i, s := range seen {
+		x := AbuseAddress{Seen: s}
+		if i < abuseMaxLookups {
+			x.ASN, x.Org = a.abuseNetwork(ctx, s.Prefix)
+		}
+		v.Addresses = append(v.Addresses, x)
+	}
 	evs, err := a.Store.AbuseEvents(ctx, id, time.Time{}, 100)
 	if err != nil {
 		return v, err

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/wh3r3ar3you/uptimeforge/internal/abuse"
+	"github.com/wh3r3ar3you/uptimeforge/internal/geoip"
 	"github.com/wh3r3ar3you/uptimeforge/internal/hub"
 	"github.com/wh3r3ar3you/uptimeforge/internal/notify"
 	"github.com/wh3r3ar3you/uptimeforge/internal/store/pgtest"
@@ -304,4 +306,38 @@ func TestAbusePageDuringBan(t *testing.T) {
 	}()
 	rounds(a, 0, 35)
 	<-done
+}
+
+// orgGeo puts every address in one operator.
+type orgGeo struct{}
+
+func (orgGeo) Country(context.Context, netip.Addr) (string, error) { return "ru", nil }
+func (orgGeo) Network(_ context.Context, ip netip.Addr) (geoip.Network, error) {
+	return geoip.Network{IP: ip, Country: "ru", ASN: "as8359", Org: "MTS PJSC"}, nil
+}
+func (orgGeo) Prepare(context.Context) error { return nil }
+
+// The message carries every address of the window with its provider, from
+// the hub's own database.
+func TestAbuseNoticeHasAddressesAndProviders(t *testing.T) {
+	p := newAbusePanel(t)
+	p.ips.Store(8)
+	a, sent := abuseApp(t, pgtest.URL(t), p, nil)
+	a.geo = orgGeo{}
+	rounds(a, 0, 15)
+	s := sent()
+	if len(s) != 1 {
+		t.Fatalf("notices %+v", s)
+	}
+	n := s[0]
+	if len(n.Addresses) != 8 || n.Addresses[0].IP == "" || n.Addresses[0].Org != "MTS PJSC" || n.Addresses[0].ASN != "as8359" {
+		t.Fatalf("addresses %+v", n.Addresses)
+	}
+	if len(n.Operators) != 1 || n.Operators[0] != "MTS PJSC · 8" {
+		t.Fatalf("operators %v", n.Operators)
+	}
+	v, _ := a.AbuseUser(context.Background(), 7)
+	if len(v.Addresses) != 8 || v.Addresses[0].Org != "MTS PJSC" {
+		t.Fatalf("page addresses %+v", v.Addresses)
+	}
 }

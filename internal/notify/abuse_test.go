@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -55,5 +56,26 @@ func TestAbuseNoticeFollowsItsRoute(t *testing.T) {
 func TestAbuseHasATestMessage(t *testing.T) {
 	if s := (&Formatter{Lang: "ru"}).Test(EventAbuse); !strings.Contains(s, "Антифрод") {
 		t.Fatalf("test message %q", s)
+	}
+}
+
+// The message lists the addresses with their provider, so the admin sees at
+// a glance whether it is one phone hopping inside one operator or a crowd.
+func TestAbuseNoticeListsAddresses(t *testing.T) {
+	n := AbuseNotice{Action: "notify", UserID: 7, Limit: 1, Now: 25, Operators: []string{"MTS · 20", "Beeline · 5"}}
+	for i := range 25 {
+		n.Addresses = append(n.Addresses, AbuseAddress{IP: fmt.Sprintf("83.1.0.%d", i+1), ASN: "as8359", Org: "MTS <PJSC>"})
+	}
+	s := (&Formatter{Lang: "ru"}).Abuse(n)
+	for _, want := range []string{"Адреса (25)", "<code>83.1.0.1</code> — MTS &lt;PJSC&gt; · AS8359", "<code>83.1.0.20</code>", "…и ещё 5", "MTS · 20, Beeline · 5"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("no %q in:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "83.1.0.21") {
+		t.Errorf("more than 20 addresses listed:\n%s", s)
+	}
+	if len(s) > 4000 {
+		t.Errorf("a message of %d characters may not fit Telegram", len(s))
 	}
 }

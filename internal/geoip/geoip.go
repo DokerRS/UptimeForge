@@ -58,6 +58,7 @@ type slot[T io.Closer] struct {
 	path    string
 	at      time.Time // when the open file was downloaded
 	failed  time.Time // last failed download
+	checked time.Time // last look for a newer month than the open file's
 	lastErr error
 }
 
@@ -184,12 +185,30 @@ func load[T io.Closer](ctx context.Context, d *DB, s *slot[T], prefix string, ur
 	if !s.have {
 		if p, at := d.newest(prefix); p != "" {
 			if t, err := open(p); err == nil {
-				s.t, s.have, s.path, s.at = t, true, p, at
+				s.t, s.have, s.path, s.at, s.checked = t, true, p, at, at
 			}
 		}
 	}
-	if s.have && now.Sub(s.at) < maxAge {
+	// A database a month: the file is fresh until 35 days old, but once a
+	// new month has begun a fetch looks for its file once a day.
+	newMonth := s.have && now.Sub(s.at) < maxAge && monthOf(s.path) != now.Format("2006-01") && now.Sub(s.checked) >= 24*time.Hour
+	if s.have && now.Sub(s.at) < maxAge && (!newMonth || mode == fetchNever) {
 		return s.t, nil
+	}
+	if newMonth {
+		s.checked = now
+		p, err := d.downloadMonth(ctx, now, prefix, url)
+		if err == nil {
+			if t, err := open(p); err == nil {
+				old, oldPath := s.t, s.path
+				s.t, s.path, s.at = t, p, now
+				old.Close()
+				os.Remove(oldPath)
+			} else {
+				os.Remove(p)
+			}
+		}
+		return s.t, nil // not out yet, or broken: the current file stays
 	}
 	if mode == fetchNever {
 		if s.have {
@@ -211,7 +230,7 @@ func load[T io.Closer](ctx context.Context, d *DB, s *slot[T], prefix string, ur
 		var t T
 		if t, err = open(p); err == nil {
 			old, oldHave, oldPath := s.t, s.have, s.path
-			s.t, s.have, s.path, s.at, s.failed = t, true, p, now, time.Time{}
+			s.t, s.have, s.path, s.at, s.failed, s.checked = t, true, p, now, time.Time{}, now
 			if oldHave && oldPath != p {
 				old.Close()
 				os.Remove(oldPath)
@@ -254,6 +273,42 @@ func (d *DB) newest(prefix string) (string, time.Time) {
 		return "", time.Time{}
 	}
 	return p, st.ModTime()
+}
+
+// monthOf is the month in a database file's name (prefix-YYYY-MM.mmdb).
+func monthOf(path string) string {
+	base := strings.TrimSuffix(filepath.Base(path), ".mmdb")
+	if len(base) < 7 {
+		return ""
+	}
+	return base[len(base)-7:]
+}
+
+// downloadMonth fetches this month's database only, into a new file next
+// to the open one.
+func (d *DB) downloadMonth(ctx context.Context, now time.Time, prefix string, url func(time.Time) string) (string, error) {
+	client := d.HTTP
+	if client == nil {
+		client = &http.Client{Timeout: 2 * time.Minute}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url(now), nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("%s: HTTP %d", now.Format("2006-01"), resp.StatusCode)
+	}
+	p := filepath.Join(d.Dir, prefix+"-"+now.Format("2006-01")+".mmdb")
+	if err := unpack(resp.Body, p); err != nil {
+		os.Remove(p)
+		return "", err
+	}
+	return p, nil
 }
 
 // download fetches this month's database, or last month's early in a month
