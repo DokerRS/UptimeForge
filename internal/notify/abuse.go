@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // EventAbuse is the antifraud's message about a subscriber far over its
@@ -15,6 +16,12 @@ type AbuseAddress struct {
 	IP  string
 	ASN string // "as8359", "" when unknown
 	Org string
+}
+
+// AbuseOperator is an operator and how many of the addresses are its.
+type AbuseOperator struct {
+	Name  string
+	Count int
 }
 
 // abuseMaxAddresses keeps a message well inside Telegram's 4096 characters.
@@ -31,7 +38,7 @@ type AbuseNotice struct {
 	Now        int // addresses at once
 	Day        int // addresses over 24 hours
 	Nodes      []string
-	Operators  []string // "MTS · 8": operators and how many addresses each
+	Operators  []AbuseOperator // most addresses first
 	Addresses  []AbuseAddress
 	Error      string // the panel refused the ban
 	DropError  string // disabled, but its open connections were not closed
@@ -79,7 +86,11 @@ func (f *Formatter) Abuse(n AbuseNotice) string {
 		lines = append(lines, d["nodes"]+": "+esc(strings.Join(n.Nodes, ", ")))
 	}
 	if len(n.Operators) > 0 {
-		lines = append(lines, d["operators"]+": "+esc(strings.Join(n.Operators, ", ")))
+		ops := make([]string, len(n.Operators))
+		for i, o := range n.Operators {
+			ops[i] = fmt.Sprintf("%s · %d", o.Name, o.Count)
+		}
+		lines = append(lines, d["operators"]+": "+esc(strings.Join(ops, ", ")))
 	}
 	if len(n.Addresses) > 0 {
 		lines = append(lines, "", fmt.Sprintf(d["addresses"], len(n.Addresses)))
@@ -119,6 +130,143 @@ func (t *Telegram) NotifyAbuse(ctx context.Context, n AbuseNotice) error {
 	if to.off {
 		return nil
 	}
-	_, err := t.send(ctx, to, t.f.Abuse(n), to.silent, 0, nil)
+	// A rich card, or the plain HTML on a Bot API server without rich messages.
+	_, err := t.sendCard(ctx, to, t.f.RichAbuse(n), t.f.Abuse(n), to.silent, nil)
 	return err
+}
+
+var abuseRichTexts = map[string]map[string]string{
+	"ru": {
+		"h_notify": "🚨 Антифрод · превышение устройств", "h_would_ban": "⛔ Антифрод · был бы заблокирован",
+		"h_ban": "🔒 Антифрод · подписка отключена", "h_ban_failed": "⚠️ Антифрод · не удалось отключить",
+		"client": "👤 Клиент", "tg": "✈️ Telegram", "limit": "📱 Лимит устройств", "now": "🌐 Адресов сейчас", "over": "в %s раза больше лимита",
+		"day": "🕓 За 24 часа", "nodes": "🖥 Ноды", "action": "⚖️ Действие",
+		"a_notify": "🔔 только уведомление", "a_would_ban": "⛔ был бы заблокирован (включён режим уведомлений)",
+		"a_ban": "🔒 подписка отключена, подключения оборваны", "a_ban_failed": "⚠️ панель не дала отключить",
+		"operators": "📡 Операторы", "operator": "Оператор", "count": "Адресов", "addresses": "🌍 Адреса (%d)", "address": "Адрес",
+		"more": "…и ещё %d", "error": "Ошибка панели", "drop_error": "Подписка отключена, но подключения не оборваны",
+		"would_hint": "💡 Чтобы такие клиенты блокировались сами: Настройки → Remnawave → Антифрод → «Уведомлять и блокировать».",
+	},
+	"en": {
+		"h_notify": "🚨 Antifraud · over the device limit", "h_would_ban": "⛔ Antifraud · would be banned",
+		"h_ban": "🔒 Antifraud · subscription disabled", "h_ban_failed": "⚠️ Antifraud · could not disable",
+		"client": "👤 Client", "tg": "✈️ Telegram", "limit": "📱 Device limit", "now": "🌐 Addresses now", "over": "%s× the limit",
+		"day": "🕓 Over 24 hours", "nodes": "🖥 Nodes", "action": "⚖️ Action",
+		"a_notify": "🔔 notice only", "a_would_ban": "⛔ would be banned (notify mode is on)",
+		"a_ban": "🔒 subscription disabled, connections closed", "a_ban_failed": "⚠️ the panel refused",
+		"operators": "📡 Operators", "operator": "Operator", "count": "Addresses", "addresses": "🌍 Addresses (%d)", "address": "Address",
+		"more": "…and %d more", "error": "Panel error", "drop_error": "Disabled, but its connections were not closed",
+		"would_hint": "💡 To have such subscribers banned automatically: Settings → Remnawave → Antifraud → \"Notify and ban\".",
+	},
+}
+
+// abuseRichAddresses caps the folded address table.
+const abuseRichAddresses = 30
+
+// RichAbuse renders an antifraud message as a rich card: a table of facts,
+// the operators, and the addresses folded away.
+func (f *Formatter) RichAbuse(n AbuseNotice) string {
+	d, ok := abuseRichTexts[f.Lang]
+	if !ok {
+		d = abuseRichTexts["en"]
+	}
+	kind := n.Action
+	if kind == "ban" && n.Error != "" {
+		kind = "ban_failed"
+	}
+	if d["h_"+kind] == "" {
+		kind = "notify"
+	}
+	var b strings.Builder
+	b.WriteString("<h3>" + d["h_"+kind] + "</h3>")
+
+	row := func(k, v string) { b.WriteString("<tr><td>" + k + "</td><td>" + v + "</td></tr>") }
+	b.WriteString("<table bordered striped compact>")
+	who := fmt.Sprintf("<code>%d</code>", n.UserID)
+	if n.Username != "" {
+		who += " · " + esc(n.Username)
+	}
+	row(d["client"], who)
+	if n.TelegramID != 0 {
+		row(d["tg"], fmt.Sprintf("<code>%d</code>", n.TelegramID))
+	}
+	row(d["limit"], fmt.Sprint(n.Limit))
+	now := fmt.Sprintf("<b>%d</b>", n.Now)
+	if n.Limit > 0 {
+		x := strings.TrimSuffix(strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n.Now)/float64(n.Limit)), "0"), ".")
+		if f.Lang == "ru" {
+			x = strings.ReplaceAll(x, ".", ",")
+		}
+		now += " · " + fmt.Sprintf(d["over"], x)
+	}
+	row(d["now"], now)
+	row(d["day"], fmt.Sprint(n.Day))
+	if len(n.Nodes) > 0 {
+		row(d["nodes"], esc(strings.Join(n.Nodes, ", ")))
+	}
+	row(d["action"], d["a_"+kind])
+	b.WriteString("</table>")
+
+	if len(n.Operators) > 0 {
+		b.WriteString("<p><b>" + d["operators"] + "</b></p><table bordered striped compact><tr><th>" + d["operator"] + "</th><th>" + d["count"] + "</th></tr>")
+		for _, o := range n.Operators {
+			b.WriteString(fmt.Sprintf("<tr><td>%s</td><td>%d</td></tr>", esc(o.Name), o.Count))
+		}
+		b.WriteString("</table>")
+	}
+	if len(n.Addresses) > 0 {
+		b.WriteString("<details><summary>" + fmt.Sprintf(d["addresses"], len(n.Addresses)) + "</summary><table bordered striped compact><tr><th>" +
+			d["address"] + "</th><th>" + d["operator"] + "</th></tr>")
+		for _, x := range n.Addresses[:min(len(n.Addresses), abuseRichAddresses)] {
+			who := []string{}
+			if x.Org != "" {
+				who = append(who, esc(x.Org))
+			}
+			if x.ASN != "" {
+				who = append(who, strings.ToUpper(esc(x.ASN)))
+			}
+			org := strings.Join(who, " · ")
+			if org == "" {
+				org = "—"
+			}
+			b.WriteString("<tr><td><code>" + esc(x.IP) + "</code></td><td>" + org + "</td></tr>")
+		}
+		if extra := len(n.Addresses) - abuseRichAddresses; extra > 0 {
+			b.WriteString(`<tr><td colspan="2">` + fmt.Sprintf(d["more"], extra) + "</td></tr>")
+		}
+		b.WriteString("</table></details>")
+	}
+	if n.Error != "" {
+		b.WriteString("<blockquote>⚠️ " + d["error"] + ": <code>" + esc(n.Error) + "</code></blockquote>")
+	}
+	if n.DropError != "" {
+		b.WriteString("<blockquote>⚠️ " + d["drop_error"] + ": <code>" + esc(n.DropError) + "</code></blockquote>")
+	}
+	if kind == "would_ban" {
+		b.WriteString("<blockquote>" + d["would_hint"] + "</blockquote>")
+	}
+	at := time.Now()
+	if f.Now != nil {
+		at = f.Now()
+	}
+	if f.Loc != nil {
+		at = at.In(f.Loc)
+	}
+	b.WriteString("<footer>🛡 UptimeForge · " + at.Format("02.01 15:04") + "</footer>")
+	return b.String()
+}
+
+// SampleAbuse is a made-up case for the Test button (documentation
+// addresses, no real subscriber).
+func SampleAbuse() AbuseNotice {
+	n := AbuseNotice{Action: "would_ban", UserID: 1001, Username: "sample_user", TelegramID: 777000111, Limit: 2, Now: 14, Day: 37,
+		Nodes: []string{"de-frankfurt-1", "nl-amsterdam-1"}, Operators: []AbuseOperator{{"MTS PJSC", 9}, {"PJSC Rostelecom", 5}}}
+	for i := range 14 {
+		org, asn := "MTS PJSC", "as8359"
+		if i >= 9 {
+			org, asn = "PJSC Rostelecom", "as12389"
+		}
+		n.Addresses = append(n.Addresses, AbuseAddress{IP: fmt.Sprintf("203.0.113.%d", 10+i), ASN: asn, Org: org})
+	}
+	return n
 }

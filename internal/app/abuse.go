@@ -362,7 +362,7 @@ func (a *App) abuseAct(ctx context.Context, c *remnawave.Client, at time.Time, v
 // abuseAddresses lists the user's addresses inside the window with the
 // operator of each, from the hub's offline GeoIP database (nothing is sent
 // anywhere), and the operators with how many addresses each, most first.
-func (a *App) abuseAddresses(ctx context.Context, user int64, at time.Time) ([]notify.AbuseAddress, []string) {
+func (a *App) abuseAddresses(ctx context.Context, user int64, at time.Time) ([]notify.AbuseAddress, []notify.AbuseOperator) {
 	a.abuse.mu.Lock()
 	window := a.Hub.Config().Remnawave.Abuse.Effective().Window.D()
 	seen := a.abuse.tr.Addresses(user)
@@ -386,9 +386,9 @@ func (a *App) abuseAddresses(ctx context.Context, user int64, at time.Time) ([]n
 	sort.Slice(names, func(i, j int) bool {
 		return count[names[i]] > count[names[j]] || (count[names[i]] == count[names[j]] && names[i] < names[j])
 	})
-	ops := make([]string, 0, min(len(names), 5))
+	ops := make([]notify.AbuseOperator, 0, min(len(names), 5))
 	for _, n := range names[:min(len(names), 5)] {
-		ops = append(ops, fmt.Sprintf("%s · %d", n, count[n]))
+		ops = append(ops, notify.AbuseOperator{Name: n, Count: count[n]})
 	}
 	return out, ops
 }
