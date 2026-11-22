@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -19,6 +20,9 @@ type runRequest struct {
 	Probes    []string `json:"probes"`
 	Mode      string   `json:"mode"` // "auto" or "subscription"
 	UserAgent string   `json:"user_agent"`
+	// Check is a check typed in the form's own fields (a port, a ping, a DNS
+	// name…); it takes the place of Target.
+	Check *checks.Spec `json:"check"`
 }
 
 type runRow struct {
@@ -67,6 +71,26 @@ func SpecFor(target string) (checks.Spec, error) {
 	return spec, nil
 }
 
+// typedSpec readies a check typed in Tools for one run on the probes. A type
+// that only the hub can judge (push, manual) has nothing to run on a probe,
+// and a subscription is many checks: Tools has its own mode for that.
+func typedSpec(spec checks.Spec) (checks.Spec, error) {
+	spec.ID, spec.Interval = "_run", 0
+	if info, ok := checks.TypeOf(spec.Type); ok && info.HubOnly {
+		return spec, fmt.Errorf("a %s check waits for something to reach the hub: there is nothing to run on a probe", spec.Type)
+	}
+	if spec.Xray != nil && spec.Xray.Subscription != "" {
+		return spec, errors.New("test a subscription in the subscription mode")
+	}
+	if spec.Timeout == 0 {
+		spec.Timeout = checks.Duration(checks.DefaultTimeout)
+		if spec.Type == "xray" {
+			spec.Timeout = checks.Duration(25 * time.Second)
+		}
+	}
+	return spec, spec.Validate()
+}
+
 func (s *Server) runTool(w http.ResponseWriter, r *http.Request) {
 	var req runRequest
 	if err := decode(r, &req); err != nil {
@@ -80,6 +104,17 @@ func (s *Server) runTool(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
 
+	if req.Check != nil {
+		spec, err := typedSpec(*req.Check)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		row := runRow{Name: spec.Target(), Target: spec.Target(), Type: spec.Type}
+		row.Outcomes = s.app.Hub.RunOnce(ctx, spec, req.Probes)
+		writeJSON(w, http.StatusOK, map[string]any{"rows": []runRow{row}})
+		return
+	}
 	spec, err := SpecFor(req.Target)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)

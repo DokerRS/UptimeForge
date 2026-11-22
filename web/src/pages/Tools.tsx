@@ -1,5 +1,5 @@
 import {
-  Alert, Badge, Box, Button, Card, Code, Group, Loader, Progress, SegmentedControl, SimpleGrid, Stack, Text, TextInput, Textarea,
+  Alert, Badge, Box, Button, Card, Code, Group, Loader, Progress, SegmentedControl, Select, SimpleGrid, Stack, Text, TextInput, Textarea,
   Tooltip,
 } from '@mantine/core';
 import {
@@ -8,10 +8,12 @@ import {
 import { useMutation } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { api, ApiError, apiStream, isChecker, useProbes, type ProbeRow, type RunOutcome, type RunRow } from '../api';
+import { api, ApiError, apiStream, isChecker, useMeta, useProbes, type CheckConfig, type ProbeRow, type RunOutcome, type RunRow } from '../api';
+import { catalogKey, CheckFields, clean, ownSettings, withType } from '../components/checks/CheckFields';
+import { checkText } from '../components/checkText';
 import { Section } from '../components/Cards';
 import { PageHeader } from '../components/Misc';
-import { ProbePicker } from '../components/ProbePicker';
+import { carriesSecrets, ProbePicker } from '../components/ProbePicker';
 import { classify, useReason, useWhy } from '../components/ProbeLines';
 import { KindIcon, kindColor, Legend, VerdictBadge } from '../components/Status';
 import { flag, ms } from '../format';
@@ -21,7 +23,8 @@ import { status } from '../theme';
 
 const L = {
   ru: {
-    title: 'Проверка конфигов', subtitle: 'Проверьте ссылку, прокси или подписку со всех проб сразу — до того, как добавлять в мониторинг',
+    title: 'Проверка конфигов', subtitle: 'Проверьте ссылку, прокси, сайт, порт или подписку со всех проб сразу — до того, как добавлять в мониторинг',
+    kind: 'Тип проверки', kind_auto: 'Авто: ссылка, URL или host:port', kind_auto_hint: 'Тип определится по тому, что вставлено',
     mode_single: 'Один конфиг', mode_sub: 'Подписка целиком', target: 'Что проверить', sub_url: 'URL подписки',
     target_hint: 'Ссылка vless:// vmess:// trojan:// ss:// hy2://, MTProxy tg://proxy или t.me/proxy, http(s)-адрес или host:port',
     sub_hint: 'Хаб скачает подписку и проверит каждый конфиг (до 100) с выбранных проб: по одному, до 5 секунд на конфиг',
@@ -41,7 +44,8 @@ const L = {
     empty: 'Вставьте конфиг и нажмите «Проверить»', empty_hint: 'Каждая проба проверит его из своей сети: так сразу видно, где он заблокирован',
   },
   en: {
-    title: 'Config checker', subtitle: 'Test a link, proxy or subscription from every probe at once — before adding it to monitoring',
+    title: 'Config checker', subtitle: 'Test a link, proxy, site, port or subscription from every probe at once — before adding it to monitoring',
+    kind: 'Check type', kind_auto: 'Auto: a link, URL or host:port', kind_auto_hint: 'The type follows from what you paste',
     mode_single: 'Single target', mode_sub: 'Whole subscription', target: 'What to check', sub_url: 'Subscription URL',
     target_hint: 'A vless:// vmess:// trojan:// ss:// hy2:// link, a tg://proxy or t.me/proxy MTProxy link, an http(s) URL or host:port',
     sub_hint: 'The hub downloads the subscription and checks every config (up to 100) from the selected probes: one at a time, up to 5 seconds each',
@@ -404,8 +408,33 @@ export default function Tools() {
         : probesQ.data.probes.filter((p) => p.online && !isChecker(p)).map((p) => p.id));
     }
   }, [probesQ.data, params]);
-  // A VPN link, an MTProxy secret or a subscription: untrusted checker agents may not see it.
-  const secrets = mode === 'subscription' || targetCarriesSecrets(target);
+  // "auto" reads the type from what is pasted; any other value is a catalog
+  // entry whose fields are typed in, as in the check form.
+  const [kind, setKind] = useState('auto');
+  const [check, setCheck] = useState<CheckConfig>({ id: '_run', type: 'http' });
+  const { lang } = useLang();
+  const words = checkText[lang] as Record<string, string>;
+  const catalog = useMeta().data?.check_catalog ?? [];
+  // A probe can run anything but what waits for the hub (push, manual);
+  // links and MTProxy are what "auto" already takes.
+  const runnable = useMemo(() => catalog.filter((e) => !e.hub_only && e.type !== 'xray' && e.type !== 'mtproto'), [catalog]);
+  const info = runnable.find((e) => catalogKey(e) === kind);
+  const kindOptions = useMemo(() => [
+    { group: '', items: [{ value: 'auto', label: t('kind_auto') }] },
+    ...[...new Set(runnable.map((e) => e.category))].map((cat) => ({
+      group: words[`c_${cat}`] ?? cat,
+      items: runnable.filter((e) => e.category === cat).map((e) => ({ value: catalogKey(e), label: words[`t_${catalogKey(e)}`] ?? catalogKey(e) })),
+    })),
+  ], [runnable, words, t]);
+  const pickKind = (k: string) => {
+    setKind(k);
+    const e = runnable.find((x) => catalogKey(x) === k);
+    if (e) setCheck((x) => withType(x, e));
+  };
+  const typed = mode === 'auto' && !!info;
+
+  // A VPN link, an MTProxy secret, a password or a subscription: untrusted checker agents may not see it.
+  const secrets = mode === 'subscription' || (typed ? carriesSecrets(check, catalog) : targetCarriesSecrets(target));
 
   const run = useMutation<{ rows: RunRow[]; mode: Mode }, ApiError, void>({
     mutationFn: async () => {
@@ -430,7 +459,8 @@ export default function Tools() {
         return { rows: [], mode };
       }
       setSub(null);
-      const res = await api<{ rows: RunRow[] }>('POST', '/api/v1/tools/run', { target: target.trim(), probes: selected, mode, user_agent: '' });
+      const body = typed ? { check: clean(ownSettings(check)), probes: selected } : { target: target.trim(), probes: selected, mode, user_agent: '' };
+      const res = await api<{ rows: RunRow[] }>('POST', '/api/v1/tools/run', body);
       return { rows: res.rows ?? [], mode };
     },
   });
@@ -438,7 +468,7 @@ export default function Tools() {
   const abort = useRef<AbortController | null>(null);
   useEffect(() => () => abort.current?.abort(), []);
 
-  const canRun = target.trim() !== '' && selected.length > 0 && !run.isPending;
+  const canRun = (typed || target.trim() !== '') && selected.length > 0 && !run.isPending;
   const go = () => canRun && run.mutate();
 
   return (
@@ -454,7 +484,23 @@ export default function Tools() {
               style={{ alignSelf: 'flex-start' }}
               maw="100%"
             />
-            {mode === 'auto' ? (
+            {mode === 'auto' && (
+              <Select
+                label={t('kind')}
+                description={info ? words[`d_${kind}`] : t('kind_auto_hint')}
+                data={kindOptions}
+                value={kind}
+                onChange={(v) => v && pickKind(v)}
+                searchable
+                allowDeselect={false}
+                maxDropdownHeight={380}
+                nothingFoundMessage="—"
+                maw={520}
+              />
+            )}
+            {typed ? (
+              <CheckFields key={kind} d={check} info={info} onChange={(patch) => setCheck((x) => ({ ...x, ...patch }))} />
+            ) : mode === 'auto' ? (
               <Textarea
                 label={t('target')}
                 description={t('target_hint')}

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,76 @@ import (
 
 	"github.com/wh3r3ar3you/uptimeforge/internal/hub"
 )
+
+// runTyped posts a typed check to the Tools run endpoint.
+func runTyped(t *testing.T, c *client, base string, check map[string]any) (*http.Response, map[string][]runRow) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{"check": check, "probes": []string{"hub"}})
+	req, _ := http.NewRequest("POST", base+"/api/v1/tools/run", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", base)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string][]runRow
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return resp, out
+}
+
+// Tools runs any check a probe can run, typed with the same fields as the
+// check form: a port, a ping, a DNS name, a site with a keyword.
+func TestToolRunsTypedCheck(t *testing.T) {
+	_, srv, _ := startHub(t)
+	c := newClient(t, srv.URL)
+	setupAdmin(c)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := ln.Addr().String()
+	ln.Close()
+	ln, _ = net.Listen("tcp", open)
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+
+	resp, out := runTyped(t, c, srv.URL, map[string]any{"type": "tcp", "tcp": map[string]any{"address": open}})
+	rows := out["rows"]
+	if resp.StatusCode != 200 || len(rows) != 1 || rows[0].Type != "tcp" || rows[0].Target != open || len(rows[0].Outcomes) != 1 {
+		t.Fatalf("status %d rows %+v", resp.StatusCode, rows)
+	}
+	if r := rows[0].Outcomes[0].Result; r == nil || r.Status != "up" {
+		t.Fatalf("open port: %+v", rows[0].Outcomes[0])
+	}
+
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("hello world")) }))
+	defer site.Close()
+	_, out = runTyped(t, c, srv.URL, map[string]any{"type": "http", "http": map[string]any{"url": site.URL, "keyword": "missing"}})
+	if r := out["rows"][0].Outcomes[0].Result; r == nil || r.Status == "up" {
+		t.Fatalf("keyword not on the page passed: %+v", out["rows"][0].Outcomes[0])
+	}
+
+	for name, bad := range map[string]map[string]any{
+		"no address":   {"type": "tcp", "tcp": map[string]any{}},
+		"hub only":     {"type": "push", "params": map[string]any{"token": "abc"}},
+		"unknown type": {"type": "nope"},
+		"subscription": {"type": "xray", "xray": map[string]any{"subscription": site.URL}},
+	} {
+		if resp, _ := runTyped(t, c, srv.URL, bad); resp.StatusCode != 400 {
+			t.Errorf("%s: status %d, want 400", name, resp.StatusCode)
+		}
+	}
+}
 
 // A subscription test goes one config at a time, each on every picked probe
 // at once and within subscriptionRowTimeout, and streams the rows as they are

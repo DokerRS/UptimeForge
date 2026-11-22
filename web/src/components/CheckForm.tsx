@@ -1,10 +1,10 @@
 import {
-  Accordion, Alert, Autocomplete, Box, Button, Code, Group, JsonInput, Modal, MultiSelect, NumberInput, PasswordInput, SegmentedControl, Select, Stack, Switch,
+  Accordion, Alert, Autocomplete, Box, Button, Code, Group, JsonInput, Modal, MultiSelect, NumberInput, SegmentedControl, Select, Stack,
   TagsInput, Text, Textarea, TextInput,
 } from '@mantine/core';
 import { IconAlertCircle, IconInfoCircle } from '@tabler/icons-react';
 import { useMemo, useState } from 'react';
-import { api, ApiError, queryClient, useChecks, useMeta, type CatalogEntry, type CatalogField, type CheckConfig } from '../api';
+import { api, ApiError, queryClient, useChecks, useMeta, type CheckConfig } from '../api';
 import { parseGoDuration } from '../format';
 import { useParentLabels, useParentOptions } from './checks/parents';
 import { useGuardedClose } from './guards';
@@ -13,6 +13,7 @@ import { useCommon, useLang, useT } from '../i18n';
 import { checkText } from './checkText';
 import { CopyBlock, notifyOk } from './Misc';
 import { carriesSecrets, ProbePicker } from './ProbePicker';
+import { catalogKey, CheckFields, clean, ownSettings, withType } from './checks/CheckFields';
 
 const L = {
   ru: {
@@ -29,7 +30,6 @@ const L = {
     dl_bytes: 'Сколько качать, байт', heavy: 'Загрузка каждые N прогонов', heavy_hint: 'Ловит обрыв соединения на ~16 КБ (ТСПУ). 0 значит по умолчанию (5), -1 значит никогда',
     stall: 'Обрыв, если нет данных дольше', egress: 'Ожидаемый IP выхода', egress_hint: 'IP или подсеть, Enter после каждого',
     mt_link: 'Ссылка tg://proxy или t.me/proxy', mt_or: 'или адрес и секрет', dc_all: 'все', address: 'Адрес (host:port)', secret: 'Секрет', dc: 'DC Telegram',
-    keyword: 'Ключевое слово', keyword_hint: 'Проверка упадёт, если этого текста нет в ответе', keyword_invert: 'Наоборот: падать, если текст есть',
     push_url: 'Адрес для задачи', push_hint: 'Вызывайте его из cron или скрипта. Если вызовов нет дольше окна ожидания, проверка упадёт. status=down сообщит об ошибке сразу.',
     needs: 'На пробе должно быть: {0}', needs_docker: 'доступ к Docker', needs_chromium: 'браузер Chromium', needs_systemd: 'systemd', needs_pm2: 'PM2', needs_tailscale: 'Tailscale', needs_icmp: 'разрешённый ICMP',
     needs_hint: 'Иначе проверка честно покажет «недоступно на этой пробе».', hub_only: 'Эта проверка работает на самом хабе, выбирать пробы не нужно.',
@@ -53,7 +53,6 @@ const L = {
     dl_bytes: 'Bytes to download', heavy: 'Download every N runs', heavy_hint: 'Catches the ~16 KB DPI freeze. 0 = default (5), -1 = never',
     stall: 'Stalled if no data for', egress: 'Expected exit IP', egress_hint: 'IP or CIDR, press Enter after each',
     mt_link: 'tg://proxy or t.me/proxy link', mt_or: 'or address and secret', dc_all: 'all', address: 'Address (host:port)', secret: 'Secret', dc: 'Telegram DC',
-    keyword: 'Keyword', keyword_hint: 'The check fails when this text is not in the response', keyword_invert: 'Reverse: fail when the text is there',
     push_url: 'URL for your job', push_hint: 'Call it from cron or a script. With no calls for longer than the window the check fails. status=down reports a failure at once.',
     needs: 'The probe needs: {0}', needs_docker: 'access to Docker', needs_chromium: 'the Chromium browser', needs_systemd: 'systemd', needs_pm2: 'PM2', needs_tailscale: 'Tailscale', needs_icmp: 'ICMP allowed',
     needs_hint: 'Otherwise the check honestly says "not available on this probe".', hub_only: 'This check runs on the hub itself, no probes to pick.',
@@ -79,28 +78,12 @@ function durationOptions(presets: string[], current?: string) {
   return all.map((x) => ({ value: x, label: x }));
 }
 const uaPresets = ['v2rayN/7.0', 'Happ/2.0', 'Streisand/1.0', 'clash-verge/2.0', 'sing-box/1.11'];
-const OWN_KEYS = ['xray', 'mtproto', 'http', 'tcp', 'tls', 'dns', 'params'] as const;
-const STRUCT_TYPES = ['http', 'dns', 'tcp', 'tls'];
 
 function slugify(s: string) {
   const map: Record<string, string> = { а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'c', ч: 'ch', ш: 'sh', щ: 'sch', ы: 'y', э: 'e', ю: 'yu', я: 'ya' };
   return s.toLowerCase().split('').map((c) => map[c] ?? c).join('').replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
 }
 
-/** Drop empty strings/arrays/objects so the hub applies its defaults. */
-function clean<T>(v: T): T {
-  if (Array.isArray(v)) return v.filter((x) => x !== '' && x != null).map(clean) as T;
-  if (v && typeof v === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, x] of Object.entries(v)) {
-      const c = clean(x);
-      if (c === '' || c == null || (Array.isArray(c) && c.length === 0) || (typeof c === 'object' && !Array.isArray(c) && Object.keys(c as object).length === 0)) continue;
-      out[k] = c;
-    }
-    return out as T;
-  }
-  return v;
-}
 
 /** presetOf finds which catalog entry an existing check belongs to. */
 function presetOf(c?: CheckConfig): string {
@@ -111,23 +94,12 @@ function presetOf(c?: CheckConfig): string {
   return c.type;
 }
 
-const key = (e: CatalogEntry) => e.preset || e.type;
 
 export function newToken() {
   const b = crypto.getRandomValues(new Uint8Array(20));
   return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
 }
 
-// Headers are one "Name: value" per line in the form and a map in the API.
-const headersToText = (h?: Record<string, string>) => Object.entries(h ?? {}).map(([k, v]) => `${k}: ${v}`).join('\n');
-function textToHeaders(s: string) {
-  const out: Record<string, string> = {};
-  for (const line of s.split('\n')) {
-    const i = line.indexOf(':');
-    if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
-  }
-  return out;
-}
 
 export function CheckForm({ initial, opened, onClose }: { initial?: CheckConfig; opened: boolean; onClose: () => void }) {
   const t = useT(L);
@@ -141,13 +113,12 @@ export function CheckForm({ initial, opened, onClose }: { initial?: CheckConfig;
   const [idTouched, setIdTouched] = useState(editing);
   const [src, setSrc] = useState<'link' | 'sub' | 'json'>(initial?.xray?.subscription ? 'sub' : initial?.xray?.outbound ? 'json' : 'link');
   const [json, setJson] = useState(initial?.xray?.outbound ? JSON.stringify(initial.xray.outbound, null, 2) : '');
-  const [headers, setHeaders] = useState(headersToText(initial?.http?.headers));
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   // What the form started from; anything else is input a stray click must not throw away.
   const snapshot = (x: unknown[]) => JSON.stringify(x);
-  const [pristine] = useState(() => snapshot([d, picked, src, json, headers]));
-  const guard = useGuardedClose(snapshot([d, picked, src, json, headers]) !== pristine, onClose);
+  const [pristine] = useState(() => snapshot([d, picked, src, json]));
+  const guard = useGuardedClose(snapshot([d, picked, src, json]) !== pristine, onClose);
   const checks = useChecks({ live: false });
 
   const set = (patch: Partial<CheckConfig>) => setD((x) => ({ ...x, ...patch }));
@@ -160,7 +131,7 @@ export function CheckForm({ initial, opened, onClose }: { initial?: CheckConfig;
   const depMode = d.depends_on?.[0] === 'none' ? 'none' : manualDeps || d.depends_on?.length ? 'manual' : 'auto';
   const allTags = useMemo(() => [...new Set((checks.data?.checks ?? []).flatMap((r) => r.tags ?? []))].sort(), [checks.data]);
   const catalog = meta.data?.check_catalog ?? [];
-  const info = catalog.find((e) => key(e) === picked);
+  const info = catalog.find((e) => catalogKey(e) === picked);
 
   const title = (k: string) => words[`t_${k}`] ?? (L[lang] as Record<string, string>)[`t_${k}`] ?? k;
   const desc = (k: string) => words[`d_${k}`] ?? (L[lang] as Record<string, string>)[`d_${k}`] ?? '';
@@ -169,7 +140,7 @@ export function CheckForm({ initial, opened, onClose }: { initial?: CheckConfig;
     const cats = [...new Set(catalog.map((e) => e.category))];
     return cats.map((cat) => ({
       group: words[`c_${cat}`] ?? cat,
-      items: catalog.filter((e) => e.category === cat).map((e) => ({ value: key(e), label: title(key(e)) })),
+      items: catalog.filter((e) => e.category === cat).map((e) => ({ value: catalogKey(e), label: title(catalogKey(e)) })),
     }));
   }, [catalog, words]);
 
@@ -177,78 +148,19 @@ export function CheckForm({ initial, opened, onClose }: { initial?: CheckConfig;
   const secrets = carriesSecrets(d, catalog);
 
   const pick = (k: string) => {
-    const e = catalog.find((x) => key(x) === k);
+    const e = catalog.find((x) => catalogKey(x) === k);
     if (!e) return;
     setPicked(k);
     setD((x) => {
-      const next: CheckConfig = { ...x, type: e.type };
-      if (e.type === 'xray') next.xray ??= { link: '' };
-      else if (e.type === 'mtproto') next.mtproto ??= { link: '' };
-      else if (STRUCT_TYPES.includes(e.type)) (next as unknown as Record<string, unknown>)[e.type] ??= {};
-      else {
-        const params: Record<string, string> = {};
-        for (const f of e.fields ?? []) if (f.default) params[f.name] = f.default;
-        if (e.type === 'push') params.token = newToken();
-        next.params = params;
-      }
+      const next = withType(x, e);
+      if (e.type === 'push') next.params = { ...next.params, token: newToken() };
       return next;
     });
   };
 
-  // A field's value lives in the type's own struct for http, dns, tcp, tls, and in params for the rest.
-  const structured = info ? STRUCT_TYPES.includes(info.type) : false;
-  const bag = (): Record<string, unknown> => (structured ? ((d as unknown as Record<string, Record<string, unknown>>)[d.type] ?? {}) : d.params ?? {});
-  const fieldValue = (name: string): string => {
-    const v = bag()[name];
-    if (name === 'accepted_status' && Array.isArray(v)) return v.join(', ');
-    return v == null ? '' : String(v);
-  };
-  const setField = (f: CatalogField, raw: string | boolean) => {
-    if (structured) {
-      let v: unknown = raw;
-      if (f.name === 'accepted_status') v = String(raw).split(/[,\s]+/).filter(Boolean);
-      else if (f.kind === 'number') v = raw === '' ? undefined : Number(raw);
-      set({ [d.type]: { ...bag(), [f.name]: v } } as Partial<CheckConfig>);
-    } else {
-      const v = typeof raw === 'boolean' ? (raw ? 'true' : '') : String(raw);
-      set({ params: { ...(d.params ?? {}), [f.name]: v } });
-    }
-  };
-  const visible = (f: CatalogField) => {
-    if (!f.show_if) return true;
-    const [k, want] = f.show_if.split('=');
-    return (fieldValue(k) || info?.fields?.find((x) => x.name === k)?.default || '') === want;
-  };
-
-  const renderField = (f: CatalogField) => {
-    if (!visible(f) || (f.name === 'token' && d.type === 'push')) return null;
-    const common = { label: words[`f_${f.name}`] ?? f.name, description: words[`h_${f.name}`], required: f.required };
-    const mono = { input: { fontFamily: 'var(--mantine-font-family-monospace)', fontSize: 12 } };
-    if (f.name === 'headers' && d.type === 'http') {
-      return <Textarea key={f.name} {...common} autosize minRows={2} maxRows={8} styles={mono} placeholder="Authorization: Bearer …" value={headers} onChange={(e) => { const v = e.currentTarget.value; setHeaders(v); set({ http: { ...d.http!, headers: textToHeaders(v) } }); }} />;
-    }
-    switch (f.kind) {
-      case 'password':
-        return <PasswordInput key={f.name} {...common} autoComplete="new-password" value={fieldValue(f.name)} onChange={(e) => setField(f, e.currentTarget.value)} />;
-      case 'number':
-        return <NumberInput key={f.name} {...common} placeholder={f.default} hideControls value={fieldValue(f.name)} onChange={(v) => setField(f, String(v))} />;
-      case 'bool':
-        return <Switch key={f.name} label={common.label} description={common.description} checked={fieldValue(f.name) === 'true'} onChange={(e) => setField(f, e.currentTarget.checked)} />;
-      case 'select':
-        return <Select key={f.name} {...common} allowDeselect={!f.required} clearable={!f.required} placeholder={f.default} data={(f.options ?? []).map((o) => ({ value: o, label: words[`o_${o}`] ?? o }))} value={fieldValue(f.name) || f.default || null} onChange={(v) => setField(f, v ?? '')} />;
-      case 'textarea':
-        return <Textarea key={f.name} {...common} autosize minRows={3} maxRows={14} styles={mono} value={fieldValue(f.name)} onChange={(e) => setField(f, e.currentTarget.value)} />;
-    }
-    return <TextInput key={f.name} {...common} value={fieldValue(f.name)} onChange={(e) => setField(f, e.currentTarget.value)} />;
-  };
-
   const submit = async () => {
     setErr('');
-    const body: CheckConfig = { ...d };
-    for (const k of OWN_KEYS) {
-      const own = d.type === k || (k === 'params' && !STRUCT_TYPES.includes(d.type) && d.type !== 'xray' && d.type !== 'mtproto');
-      if (!own) delete body[k];
-    }
+    const body = ownSettings(d);
     if (d.type === 'xray') {
       const x = { ...(d.xray ?? {}) };
       if (src !== 'link') delete x.link;
@@ -279,11 +191,6 @@ export function CheckForm({ initial, opened, onClose }: { initial?: CheckConfig;
     }
   };
 
-  const fields = info?.fields ?? [];
-  const main = fields.filter((f) => !f.advanced);
-  const extra = fields.filter((f) => f.advanced);
-  // http has its own keyword fields; other text-returning types share the spec-level ones.
-  const sharedKeyword = !!info?.keyword && info.type !== 'http';
   // The job runs elsewhere: it needs the hub's public address, not the one this browser happens to use.
   const base = (meta.data?.public_url || window.location.origin).replace(/\/+$/, '');
   const pushURL = d.type === 'push' && d.params?.token ? `${base}/api/push/${d.params.token}?status=up&msg=OK&ping=` : '';
@@ -378,31 +285,15 @@ export function CheckForm({ initial, opened, onClose }: { initial?: CheckConfig;
           </Stack>
         )}
 
-        {main.map(renderField)}
-
-        {sharedKeyword && (
-          <Stack gap="xs">
-            <TextInput label={t('keyword')} description={t('keyword_hint')} value={d.keyword ?? ''} onChange={(e) => set({ keyword: e.currentTarget.value })} />
-            {!!d.keyword && <Switch label={t('keyword_invert')} checked={!!d.keyword_invert} onChange={(e) => set({ keyword_invert: e.currentTarget.checked })} />}
-          </Stack>
-        )}
-
-        {pushURL && (
-          <Stack gap={4}>
-            <CopyBlock label={t('push_url')} value={pushURL} />
-            <Text size="xs" c="dimmed">{t('push_hint')}</Text>
-            <Code block>{`*/5 * * * * curl -fsS "${pushURL}" >/dev/null`}</Code>
-          </Stack>
-        )}
-
-        {extra.some(visible) && (
-          <Accordion variant="contained" radius="md">
-            <Accordion.Item value="adv">
-              <Accordion.Control>{t('advanced')}</Accordion.Control>
-              <Accordion.Panel><Stack gap="sm">{extra.map(renderField)}</Stack></Accordion.Panel>
-            </Accordion.Item>
-          </Accordion>
-        )}
+        <CheckFields d={d} info={info} onChange={set}>
+          {pushURL && (
+            <Stack gap={4}>
+              <CopyBlock label={t('push_url')} value={pushURL} />
+              <Text size="xs" c="dimmed">{t('push_hint')}</Text>
+              <Code block>{`*/5 * * * * curl -fsS "${pushURL}" >/dev/null`}</Code>
+            </Stack>
+          )}
+        </CheckFields>
 
         {info?.hub_only ? (
           <Text size="xs" c="dimmed">{t('hub_only')}</Text>
