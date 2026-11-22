@@ -3,6 +3,7 @@
 package remnawave
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,10 +23,13 @@ type Client struct {
 	TZ      string            // IANA zone for "today"/calendar periods in BandwidthStats; panel default is UTC
 	Headers map[string]string // extra headers, applied last (e.g. Cookie for a protected proxy)
 	HTTP    *http.Client
+	// JobPoll is the pause between polls of an async panel job (connections
+	// of a node); New sets 1s.
+	JobPoll time.Duration
 }
 
 func New(baseURL, token string) *Client {
-	return &Client{BaseURL: baseURL, Token: token, HTTP: &http.Client{Timeout: 20 * time.Second}}
+	return &Client{BaseURL: baseURL, Token: token, HTTP: &http.Client{Timeout: 20 * time.Second}, JobPoll: time.Second}
 }
 
 type APIError struct {
@@ -156,6 +160,12 @@ func get[T any](ctx context.Context, c *Client, path string, q url.Values) (T, e
 }
 
 func (c *Client) get(ctx context.Context, path string, q url.Values, out any) error {
+	return c.do(ctx, http.MethodGet, path, q, nil, out)
+}
+
+// do sends one API call; body, if not nil, goes as JSON, and out, if not nil,
+// gets the reply's "response" field.
+func (c *Client) do(ctx context.Context, method, path string, q url.Values, body, out any) error {
 	base := strings.TrimSuffix(strings.TrimRight(c.BaseURL, "/"), "/api")
 	// The URL may carry credentials (user:password@, a key in the query):
 	// errors about it never quote it.
@@ -164,15 +174,26 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 		return errors.New("remnawave: bad panel URL: want https://panel.example.com")
 	}
 	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	var rd io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("remnawave: %s %s: %w", method, path, err)
+		}
+		rd = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), rd)
 	if err != nil {
 		var ue *url.Error
 		if errors.As(err, &ue) {
 			err = ue.Err
 		}
-		return fmt.Errorf("remnawave: GET %s: %w", path, err)
+		return fmt.Errorf("remnawave: %s %s: %w", method, path, err)
 	}
 	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("User-Agent", "UptimeForge/1.0")
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
@@ -197,29 +218,32 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 			err = ue.Err
 		}
 		if errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET) {
-			return fmt.Errorf("remnawave: GET %s: %w (the panel drops requests without X-Forwarded-For and X-Forwarded-Proto: https)", path, err)
+			return fmt.Errorf("remnawave: %s %s: %w (the panel drops requests without X-Forwarded-For and X-Forwarded-Proto: https)", method, path, err)
 		}
-		return fmt.Errorf("remnawave: GET %s: %w", path, err)
+		return fmt.Errorf("remnawave: %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
-		return fmt.Errorf("remnawave: GET %s: %w", path, err)
+		return fmt.Errorf("remnawave: %s %s: %w", method, path, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return newAPIError(http.MethodGet, path, resp.StatusCode, body)
+		return newAPIError(method, path, resp.StatusCode, raw)
+	}
+	if out == nil {
+		return nil
 	}
 	var env struct {
 		Response json.RawMessage `json:"response"`
 	}
-	if err := json.Unmarshal(body, &env); err != nil {
-		return fmt.Errorf("remnawave: GET %s: HTTP %d: not a panel API reply: %w", path, resp.StatusCode, err)
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return fmt.Errorf("remnawave: %s %s: HTTP %d: not a panel API reply: %w", method, path, resp.StatusCode, err)
 	}
 	if len(env.Response) == 0 || string(env.Response) == "null" {
-		return fmt.Errorf("remnawave: GET %s: reply has no \"response\" field", path)
+		return fmt.Errorf("remnawave: %s %s: reply has no \"response\" field", method, path)
 	}
 	if err := json.Unmarshal(env.Response, out); err != nil {
-		return fmt.Errorf("remnawave: GET %s: decode: %w", path, err)
+		return fmt.Errorf("remnawave: %s %s: decode: %w", method, path, err)
 	}
 	return nil
 }
