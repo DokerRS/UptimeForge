@@ -22,11 +22,12 @@ import (
 // device limit 1) connected from n addresses; node b also carries the
 // bridge address of node a, which is no client.
 type abusePanel struct {
-	ips     atomic.Int32
-	down    atomic.Bool // connections fail
-	failDis atomic.Bool // disable answers 500
-	mu      sync.Mutex
-	actions []string
+	ips       atomic.Int32
+	down      atomic.Bool // connections fail
+	failDis   atomic.Bool // disable answers 500
+	usersDown atomic.Bool // the user directory fails
+	mu        sync.Mutex
+	actions   []string
 	*httptest.Server
 }
 
@@ -57,6 +58,9 @@ func newAbusePanel(t *testing.T) *abusePanel {
 		case r.Method == "GET" && path == "/api/connections/by-node/job-nb":
 			// The bridge (node a) carries its clients' traffic as user 7 too.
 			io.WriteString(w, `{"response":{"isCompleted":true,"isFailed":false,"result":{"users":[{"userId":7,"ips":[{"ip":"194.26.229.27","lastSeen":"2026-11-22T00:00:00Z"}]}]}}}`)
+		case path == "/api/users" && p.usersDown.Load():
+			w.WriteHeader(500)
+			io.WriteString(w, `{"message":"boom"}`)
 		case path == "/api/users":
 			io.WriteString(w, `{"response":{"total":2,"users":[
 				{"id":7,"username":"saveoleshki","telegramId":8620400077,"status":"ACTIVE","tag":null,"hwidDeviceLimit":1,"vlessUuid":"11111111-2222-3333-4444-555555555555","subscriptionUrl":"https://sub/s3cr3t"},
@@ -191,6 +195,9 @@ func TestAbuseFailedBanDoesNotDrop(t *testing.T) {
 	if len(evs) != 2 || evs[0].Action != "ban" || evs[0].Error == "" {
 		t.Fatalf("events %+v", evs)
 	}
+	if v := a.Abuse(context.Background()); len(v.Rows) != 1 || !v.Rows[0].BanFailed || !v.Rows[0].BannedAt.IsZero() {
+		t.Fatalf("a refused ban shows as %+v", v.Rows)
+	}
 }
 
 func TestAbuseHoldSurvivesRestart(t *testing.T) {
@@ -241,4 +248,60 @@ func TestAbuseOffDoesNotPoll(t *testing.T) {
 	if len(sent()) != 0 || len(p.acts()) != 0 {
 		t.Fatal("off mode acted")
 	}
+}
+
+// The hub was down for 40 minutes: that time does not count towards a hold,
+// so a restart is no shortcut to a ban.
+func TestAbuseDowntimeDoesNotCount(t *testing.T) {
+	p := newAbusePanel(t)
+	p.ips.Store(8)
+	db := pgtest.URL(t)
+	a, _ := abuseApp(t, db, p, nil)
+	rounds(a, 0, 9) // 9 minutes held
+	b, sent := abuseApp(t, db, p, nil)
+	rounds(b, 50, 54)
+	if s := sent(); len(s) != 0 {
+		t.Fatalf("downtime counted towards the hold: %+v", s)
+	}
+	rounds(b, 55, 55)
+	if s := sent(); len(s) != 1 {
+		t.Fatalf("the hold did not resume after downtime: %+v", s)
+	}
+}
+
+// After a restart the user directory does not load: nobody is judged, and
+// what was remembered (who was told, and when) is kept.
+func TestAbuseNoDirectoryKeepsStates(t *testing.T) {
+	p := newAbusePanel(t)
+	p.ips.Store(8)
+	db := pgtest.URL(t)
+	a, _ := abuseApp(t, db, p, nil)
+	rounds(a, 0, 16)
+	p.usersDown.Store(true)
+	b, sent := abuseApp(t, db, p, nil)
+	rounds(b, 17, 40)
+	if s := sent(); len(s) != 0 {
+		t.Fatalf("judged without a directory: %+v", s)
+	}
+	st, _ := b.Store.LoadAbuseStates(context.Background())
+	if st[7].NotifiedAt.IsZero() {
+		t.Fatalf("states wiped: %+v", st)
+	}
+}
+
+// The Antifraud page is read while a round bans someone (run with -race).
+func TestAbusePageDuringBan(t *testing.T) {
+	p := newAbusePanel(t)
+	p.ips.Store(12)
+	a, _ := abuseApp(t, pgtest.URL(t), p, &abuse.Rule{Mode: abuse.ModeBan})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 200 {
+			a.Abuse(context.Background())
+			a.AbuseUser(context.Background(), 7)
+		}
+	}()
+	rounds(a, 0, 35)
+	<-done
 }

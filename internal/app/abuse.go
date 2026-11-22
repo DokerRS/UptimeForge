@@ -41,6 +41,12 @@ type abuseRun struct {
 	verdicts []abuse.Verdict
 	cover    AbuseCoverage
 	savedKey string // the states as last written
+	// lastRound is when the previous round ran (stored, so a restart knows
+	// how long the hub was down); refillUntil ends the stretch after a gap
+	// in which the window is still filling up again.
+	lastRound   time.Time
+	refillUntil time.Time
+	saveMu      sync.Mutex // one writer of the states at a time
 	// notify sends a message (the Telegram notifier; tests replace it).
 	notify func(context.Context, notify.AbuseNotice) error
 }
@@ -138,7 +144,9 @@ func (a *App) abuseRound(ctx context.Context, at time.Time) {
 	var live []remnawave.Node
 	for _, n := range nodes {
 		for _, ip := range nodeIPsOf(n) {
-			nodeIPs[ip] = true
+			if a, err := netip.ParseAddr(ip); err == nil {
+				nodeIPs[a.Unmap().WithZone("").String()] = true // the form Normalize compares
+			}
 		}
 		if n.IsConnected && !n.IsDisabled {
 			live = append(live, n)
@@ -185,7 +193,16 @@ func (a *App) abuseRound(ctx context.Context, at time.Time) {
 			r.tr.Observe(at, x.node, x.conns)
 		}
 	}
-	verdicts, states := abuse.Evaluate(at, rule, r.tr, r.users, r.fallback, cover.Answered > 0, r.states)
+	// A gap since the last round (the hub down, the antifraud off) counts for
+	// nothing: running holds move on by it, and until the window has filled
+	// again a user under the threshold keeps its hold.
+	if !r.lastRound.IsZero() && at.Sub(r.lastRound) > 2*abusePoll && cover.Answered > 0 && r.users != nil {
+		abuse.ShiftHolds(r.states, at.Sub(r.lastRound)-abusePoll)
+		r.refillUntil = at.Add(rule.Window.D())
+	}
+	poll := abuse.Poll{Answered: cover.Answered > 0, Partial: cover.Answered < len(live) || at.Before(r.refillUntil)}
+	verdicts, states := abuse.Evaluate(at, rule, r.tr, r.users, r.fallback, poll, r.states)
+	r.lastRound = at
 	r.states = states
 	if cover.Answered > 0 {
 		r.verdicts = verdicts
@@ -218,13 +235,22 @@ func (a *App) abuseRound(ctx context.Context, at time.Time) {
 			a.abuseAct(ctx, c, at, v)
 		}
 	}
-	// The states are written when they change; LastEval alone moving does
-	// not count (it only matters while the panel is unreachable).
-	r.mu.Lock()
-	save := make(map[int64]abuse.State, len(r.states))
-	for k, v := range r.states {
-		save[k] = v
+	if err := a.Store.PutSetting(ctx, abuseLastRoundKey, at); err != nil {
+		a.Log.Warn("antifraud: store the round time", "err", err)
 	}
+	a.abuseSaveStates(ctx)
+}
+
+const abuseLastRoundKey = "abuse_last_round"
+
+// abuseSaveStates writes the states when they changed; LastEval alone moving
+// does not count (the round time is stored apart).
+func (a *App) abuseSaveStates(ctx context.Context) {
+	r := &a.abuse
+	r.saveMu.Lock()
+	defer r.saveMu.Unlock()
+	r.mu.Lock()
+	save := maps.Clone(r.states)
 	r.mu.Unlock()
 	key := statesKey(save)
 	if key == r.savedKey {
@@ -269,6 +295,15 @@ func (a *App) abuseLoad(ctx context.Context, at time.Time, rule abuse.Rule) {
 	} else {
 		a.Log.Warn("antifraud: load states", "err", err)
 	}
+	var last time.Time
+	if found, err := a.Store.GetSetting(ctx, abuseLastRoundKey, &last); err == nil && found {
+		r.lastRound = last
+		// LastEval is not stored on every round: the round time is.
+		for id, st := range r.states {
+			st.LastEval = last
+			r.states[id] = st
+		}
+	}
 	r.loaded = true
 }
 
@@ -280,15 +315,11 @@ func (a *App) abuseAct(ctx context.Context, c *remnawave.Client, at time.Time, v
 	if v.Action == abuse.ActBan {
 		actx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		err := c.DisableUser(actx, v.User.ID)
+		a.abuseMark(v.User.ID, err == nil)
 		if err == nil {
-			a.abuse.mu.Lock()
-			if u, ok := a.abuse.users[v.User.ID]; ok {
-				u.Status = "DISABLED"
-				a.abuse.users[v.User.ID] = u
-			}
-			a.abuse.mu.Unlock()
 			if derr := c.DropUserConnections(actx, []int64{v.User.ID}); derr != nil {
 				a.Log.Warn("antifraud: close the connections of a disabled user", "user", v.User.ID, "err", derr)
+				n.DropError = derr.Error()
 			}
 		} else {
 			n.Error = err.Error()
@@ -373,6 +404,7 @@ type AbuseRow struct {
 	Level     abuse.Level       `json:"level"`
 	Since     time.Time         `json:"since,omitzero"`
 	BannedAt  time.Time         `json:"banned_at,omitzero"`
+	BanFailed bool              `json:"ban_failed,omitempty"` // the panel refused the ban
 	LastEvent *store.AbuseEvent `json:"last_event,omitempty"`
 }
 
@@ -393,11 +425,15 @@ func (a *App) Abuse(ctx context.Context) AbuseView {
 	byID := map[int64]int{}
 	for _, v := range r.verdicts {
 		row := AbuseRow{User: v.User, Limit: v.Limit, Now: v.Now, Day: v.Day, Nodes: v.Nodes, Level: v.Level, Since: v.Since}
-		row.BannedAt = r.states[v.User.ID].BannedAt
+		if st := r.states[v.User.ID]; st.BanFailed {
+			row.BanFailed = true
+		} else {
+			row.BannedAt = st.BannedAt
+		}
 		byID[v.User.ID] = len(view.Rows)
 		view.Rows = append(view.Rows, row)
 	}
-	users := r.users
+	users, states := r.users, maps.Clone(r.states)
 	r.mu.Unlock()
 	evs, err := a.Store.AbuseEvents(ctx, 0, time.Now().Add(-7*24*time.Hour), 500)
 	if err != nil {
@@ -416,7 +452,13 @@ func (a *App) Abuse(ctx context.Context) AbuseView {
 			u = abuse.User{ID: e.User, Username: e.Username, Limit: e.Limit}
 		}
 		byID[e.User] = len(view.Rows)
-		view.Rows = append(view.Rows, AbuseRow{User: u, Limit: e.Limit, Nodes: e.Nodes, Level: abuse.LevelOK, LastEvent: &e})
+		row := AbuseRow{User: u, Limit: e.Limit, Nodes: e.Nodes, Level: abuse.LevelOK, LastEvent: &e}
+		if st := states[e.User]; st.BanFailed {
+			row.BanFailed = true
+		} else {
+			row.BannedAt = st.BannedAt
+		}
+		view.Rows = append(view.Rows, row)
 	}
 	return view
 }
@@ -462,22 +504,20 @@ func (a *App) AbuseEnable(ctx context.Context, id int64) error {
 	if err := c.EnableUser(ctx, id); err != nil {
 		return err
 	}
+	// What was stored must be in memory first, or saving would wipe it.
+	a.abuseLoad(ctx, time.Now().UTC(), a.Hub.Config().Remnawave.Abuse.Effective())
 	r := &a.abuse
 	r.mu.Lock()
 	delete(r.states, id)
 	if u, ok := r.users[id]; ok {
+		users := maps.Clone(r.users)
 		u.Status = "ACTIVE"
-		r.users[id] = u
-	}
-	states := make(map[int64]abuse.State, len(r.states))
-	for k, v := range r.states {
-		states[k] = v
+		users[id] = u
+		r.users = users
 	}
 	username := r.users[id].Username
 	r.mu.Unlock()
-	if err := a.Store.SaveAbuseStates(ctx, states); err != nil {
-		return err
-	}
+	a.abuseSaveStates(ctx)
 	return a.Store.AddAbuseEvent(ctx, store.AbuseEvent{At: time.Now().UTC(), User: id, Username: username, Action: "enable"})
 }
 
@@ -507,4 +547,22 @@ func (a *App) AbuseAllow(ctx context.Context, id int64) error {
 		return fmt.Errorf("save the allowlist: %w", err)
 	}
 	return nil
+}
+
+// abuseMark records how a ban went: disabled, the user directory says so
+// (a fresh map: readers hold the old one without the lock); refused, the
+// state says the ban failed so the page does not show the user as banned.
+func (a *App) abuseMark(id int64, disabled bool) {
+	r := &a.abuse
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st := r.states[id]
+	st.BanFailed = !disabled
+	r.states[id] = st
+	if u, ok := r.users[id]; ok && disabled {
+		users := maps.Clone(r.users)
+		u.Status = "DISABLED"
+		users[id] = u
+		r.users = users
+	}
 }

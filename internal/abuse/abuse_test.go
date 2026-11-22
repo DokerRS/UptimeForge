@@ -94,7 +94,7 @@ func (s *sim) step(polled bool, conns map[int64][]string) []Verdict {
 		s.tr.Observe(s.at, "node-a", conns)
 	}
 	var v []Verdict
-	v, s.states = Evaluate(s.at, s.rule, s.tr, s.users, 5, polled, s.states)
+	v, s.states = Evaluate(s.at, s.rule, s.tr, s.users, 5, Poll{Answered: polled}, s.states)
 	return v
 }
 
@@ -245,5 +245,82 @@ func TestTrackerRestoreAndPrune(t *testing.T) {
 	back.Prune(t0.Add(2 * time.Minute))
 	if n, _ := back.Count(1, t0.Add(-time.Hour)); n != 0 {
 		t.Fatalf("kept stale addresses: %d", n)
+	}
+}
+
+// Time the hub spent down, or with the antifraud off, counts for nothing:
+// the holds move forward by the gap.
+func TestShiftHoldsSkipsDowntime(t *testing.T) {
+	states := map[int64]State{
+		1: {User: 1, NotifySince: t0, BanSince: t0.Add(time.Minute), NotifiedAt: t0},
+		2: {User: 2},
+	}
+	ShiftHolds(states, 40*time.Minute)
+	if !states[1].NotifySince.Equal(t0.Add(40*time.Minute)) || !states[1].BanSince.Equal(t0.Add(41*time.Minute)) || !states[1].NotifiedAt.Equal(t0) {
+		t.Fatalf("shifted %+v", states[1])
+	}
+	if !states[2].NotifySince.IsZero() {
+		t.Fatalf("an idle user got a hold: %+v", states[2])
+	}
+}
+
+// A poll that missed some nodes cannot tell a user went quiet: it keeps the
+// hold where it was instead of resetting it.
+func TestPartialPollKeepsTheHold(t *testing.T) {
+	r := (*Rule)(nil).Effective()
+	tr := NewTracker()
+	users := map[int64]User{7: {ID: 7, Limit: 1, Status: "ACTIVE"}}
+	states := map[int64]State{}
+	at := t0
+	for range 10 {
+		at = at.Add(time.Minute)
+		tr.Observe(at, "big-node", map[int64][]string{7: ips(8, 1)})
+		_, states = Evaluate(at, r, tr, users, 5, Poll{Answered: true}, states)
+	}
+	since := states[7].NotifySince
+	for range 10 { // big-node stopped answering: its addresses age out of the window
+		at = at.Add(time.Minute)
+		_, states = Evaluate(at, r, tr, users, 5, Poll{Answered: true, Partial: true}, states)
+	}
+	if !states[7].NotifySince.Equal(since) {
+		t.Fatalf("a partial poll reset the hold: %+v", states[7])
+	}
+}
+
+// Without the user directory there is no limit to judge by: nothing moves.
+func TestNoDirectoryJudgesNobody(t *testing.T) {
+	r := (*Rule)(nil).Effective()
+	tr := NewTracker()
+	tr.Observe(t0, "a", map[int64][]string{7: ips(30, 1)})
+	states := map[int64]State{7: {User: 7, NotifiedAt: t0, NotifiedNow: 12}}
+	v, next := Evaluate(t0, r, tr, nil, 0, Poll{Answered: true}, states)
+	if len(v) != 0 || next[7].NotifiedNow != 12 {
+		t.Fatalf("judged without a directory: %+v %+v", v, next)
+	}
+}
+
+// A user the directory does not know yet may be reported, never banned:
+// its own limit and tags are unknown.
+func TestUnknownUserIsNeverBanned(t *testing.T) {
+	s := newSim(t, &Rule{Mode: ModeBan}, User{ID: 1, Limit: 1, Status: "ACTIVE"})
+	acts := s.run(40, map[int64][]string{9: ips(40, 1)})
+	for _, a := range acts {
+		if a == ActBan {
+			t.Fatalf("banned a user missing from the directory: %v", acts)
+		}
+	}
+	if len(acts) == 0 {
+		t.Fatal("not even reported")
+	}
+}
+
+// In ban mode a ban that cannot happen (the user is already disabled) is
+// no "would be banned in ban mode" message.
+func TestDisabledUserInBanModeIsPlainNotice(t *testing.T) {
+	s := newSim(t, &Rule{Mode: ModeBan}, User{ID: 3, Limit: 1, Status: "DISABLED"})
+	for _, a := range s.run(40, map[int64][]string{3: ips(12, 1)}) {
+		if a == ActWouldBan || a == ActBan {
+			t.Fatalf("got %s for a disabled user in ban mode", a)
+		}
 	}
 }

@@ -577,14 +577,14 @@ export interface AbuseUser { id: number; username?: string; telegram_id?: number
 export interface AbuseEvent { at: string; user: number; username?: string; action: string; now: number; day: number; limit: number; nodes: string[]; error?: string }
 export interface AbuseRow {
   user: AbuseUser; limit: number; now: number; day: number; nodes: string[] | null; level: 'ok' | 'notify' | 'ban';
-  since?: string; banned_at?: string; last_event?: AbuseEvent;
+  since?: string; banned_at?: string; ban_failed?: boolean; last_event?: AbuseEvent;
 }
 export interface AbuseView {
   coverage: { mode: string; at?: string; nodes: number; answered: number; error?: string; users: number };
   rows: AbuseRow[];
 }
 export interface AbuseSeen { user: number; prefix: string; first: string; last: string; nodes: string[] }
-export interface AbuseUserView { user: AbuseUser; state: { level?: string; notify_since?: string; banned_at?: string }; addresses: AbuseSeen[]; events: AbuseEvent[] }
+export interface AbuseUserView { user: AbuseUser; state: { level?: string; notify_since?: string; banned_at?: string; ban_failed?: boolean }; addresses: AbuseSeen[]; events: AbuseEvent[] }
 
 export const useAbuse = () => useQuery({ queryKey: ['abuse'], queryFn: () => api<AbuseView>('GET', '/api/v1/abuse'), refetchInterval: 30_000 });
 export const useAbuseUser = (id: number | null) =>

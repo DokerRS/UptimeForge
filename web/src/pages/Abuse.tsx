@@ -56,6 +56,7 @@ function who(r: { user: { id: number; username?: string } }) {
 function StateCell({ row }: { row: AbuseRow }) {
   const t = useT(L);
   const { lang } = useLang();
+  if (row.ban_failed) return <Badge color="orange" variant="light" tt="none" leftSection={<IconAlertTriangle size={12} />}>{t('a_ban_failed')}</Badge>;
   if (row.banned_at) return <Badge color="red" variant="light" tt="none" leftSection={<IconBan size={12} />}>{t('s_banned')}</Badge>;
   if (row.level === 'ban') return <Badge color="red" variant="outline" tt="none">{t('s_ban', row.since ? since(row.since, lang) : '')}</Badge>;
   if (row.level === 'notify') return <Badge color="orange" variant="outline" tt="none">{t('s_notify', row.since ? since(row.since, lang) : '')}</Badge>;
@@ -88,7 +89,7 @@ function UserDrawer({ id, onClose }: { id: number | null; onClose: () => void })
       },
     });
   };
-  const banned = !!d?.state.banned_at || d?.user.status === 'DISABLED';
+  const banned = (!!d?.state.banned_at && !d?.state.ban_failed) || d?.user.status === 'DISABLED';
   return (
     <Drawer opened={id != null} onClose={onClose} position="right" size="lg" title={d ? <Text fw={700}>{who(d)}</Text> : null}>
       {q.isLoading || !d ? <Skeleton h={200} /> : (

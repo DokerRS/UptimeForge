@@ -23,6 +23,7 @@ type AbuseNotice struct {
 	Nodes      []string
 	Operators  []string
 	Error      string // the panel refused the ban
+	DropError  string // disabled, but its open connections were not closed
 }
 
 var abuseTexts = map[string]map[string]string{
@@ -30,14 +31,14 @@ var abuseTexts = map[string]map[string]string{
 		"notify": "🚨 <b>Антифрод: превышение устройств</b>", "would_ban": "⛔ <b>Антифрод: был бы заблокирован</b>",
 		"ban": "⛔ <b>Антифрод: подписка отключена</b>", "ban_failed": "⚠️ <b>Антифрод: не удалось отключить подписку</b>",
 		"client": "Клиент", "limit": "Лимит устройств: %d · адресов сейчас: <b>%d</b> · за 24 ч: %d",
-		"nodes": "Ноды", "operators": "Операторы", "error": "Ошибка панели",
+		"nodes": "Ноды", "operators": "Операторы", "error": "Ошибка панели", "drop_error": "Подписка отключена, но подключения не оборваны",
 		"would_hint": "В режиме ban клиент был бы заблокирован. Включить: Настройки → Remnawave → Антифрод.",
 	},
 	"en": {
 		"notify": "🚨 <b>Antifraud: over the device limit</b>", "would_ban": "⛔ <b>Antifraud: would be banned</b>",
 		"ban": "⛔ <b>Antifraud: Subscription disabled</b>", "ban_failed": "⚠️ <b>Antifraud: Could not disable the subscription</b>",
 		"client": "Client", "limit": "Device limit: %d · addresses now: <b>%d</b> · over 24 h: %d",
-		"nodes": "Nodes", "operators": "Operators", "error": "Panel error",
+		"nodes": "Nodes", "operators": "Operators", "error": "Panel error", "drop_error": "Disabled, but its connections were not closed",
 		"would_hint": "In ban mode this client would be disabled. Turn it on in Settings → Remnawave → Antifraud.",
 	},
 }
@@ -71,6 +72,9 @@ func (f *Formatter) Abuse(n AbuseNotice) string {
 	}
 	if n.Error != "" {
 		lines = append(lines, d["error"]+": <code>"+esc(n.Error)+"</code>")
+	}
+	if n.DropError != "" {
+		lines = append(lines, d["drop_error"]+": <code>"+esc(n.DropError)+"</code>")
 	}
 	if n.Action == "would_ban" {
 		lines = append(lines, "", "<i>"+d["would_hint"]+"</i>")

@@ -295,6 +295,7 @@ type State struct {
 	NotifiedNow int       `json:"notified_now,omitempty"`
 	NotifiedBan bool      `json:"notified_ban,omitempty"`
 	BannedAt    time.Time `json:"banned_at,omitzero"`
+	BanFailed   bool      `json:"ban_failed,omitempty"` // the panel refused the ban
 }
 
 // Verdict is one user above a threshold, and what to do now.
@@ -313,13 +314,37 @@ func (r Rule) allowed(u User) bool {
 	return slices.Contains(r.AllowUsers, u.ID) || (u.Tag != "" && slices.Contains(r.AllowTags, u.Tag))
 }
 
-// Evaluate judges every user the tracker holds at at. polled is false when
-// this round got nothing from the panel: then nothing moves, and the time
-// spent blind does not count towards a hold. fallback is the device limit
-// for a user the directory does not know yet.
-func Evaluate(at time.Time, r Rule, tr *Tracker, users map[int64]User, fallback int, polled bool, states map[int64]State) ([]Verdict, map[int64]State) {
+// Poll is what one round got from the panel. Answered: at least one node
+// answered. Partial: some node did not, or the window is still refilling
+// after a gap; a user under the threshold then keeps its hold, since the
+// missing addresses may simply not have been read.
+type Poll struct {
+	Answered bool
+	Partial  bool
+}
+
+// ShiftHolds moves every running hold forward by gap: time the hub was down,
+// or the antifraud off, does not count towards one.
+func ShiftHolds(states map[int64]State, gap time.Duration) {
+	for id, st := range states {
+		if !st.NotifySince.IsZero() {
+			st.NotifySince = st.NotifySince.Add(gap)
+		}
+		if !st.BanSince.IsZero() {
+			st.BanSince = st.BanSince.Add(gap)
+		}
+		states[id] = st
+	}
+}
+
+// Evaluate judges every user the tracker holds at at. A round that got
+// nothing from the panel, or has no user directory to judge by, moves
+// nothing, and the time spent blind does not count towards a hold. fallback
+// is the device limit for a user the directory does not know yet; such a
+// user may be reported but never banned.
+func Evaluate(at time.Time, r Rule, tr *Tracker, users map[int64]User, fallback int, poll Poll, states map[int64]State) ([]Verdict, map[int64]State) {
 	next := make(map[int64]State, len(states))
-	if !polled {
+	if !poll.Answered || users == nil {
 		for id, st := range states {
 			if !st.LastEval.IsZero() {
 				gap := at.Sub(st.LastEval)
@@ -345,8 +370,8 @@ func Evaluate(at time.Time, r Rule, tr *Tracker, users map[int64]User, fallback 
 	}
 	var out []Verdict
 	for id := range ids {
-		u, ok := users[id]
-		if !ok {
+		u, known := users[id]
+		if !known {
 			u = User{ID: id, Limit: fallback}
 		}
 		st := states[id]
@@ -361,7 +386,7 @@ func Evaluate(at time.Time, r Rule, tr *Tracker, users map[int64]User, fallback 
 			if st.NotifySince.IsZero() {
 				st.NotifySince = at
 			}
-		} else {
+		} else if !poll.Partial {
 			st.NotifySince = time.Time{}
 		}
 		if now >= r.Ban.For(u.Limit) {
@@ -369,27 +394,29 @@ func Evaluate(at time.Time, r Rule, tr *Tracker, users map[int64]User, fallback 
 			if st.BanSince.IsZero() {
 				st.BanSince = at
 			}
-		} else {
+		} else if !poll.Partial {
 			st.BanSince = time.Time{}
 		}
 		st.Level = level
 		// Re-enabled in the panel by hand: after the cooldown it may be banned again.
 		if !st.BannedAt.IsZero() && u.Status == "ACTIVE" && at.Sub(st.BannedAt) >= r.Cooldown.D() {
-			st.BannedAt = time.Time{}
+			st.BannedAt, st.BanFailed = time.Time{}, false
 		}
 
 		heldNotify := !st.NotifySince.IsZero() && at.Sub(st.NotifySince) >= r.Notify.Hold.D()
 		heldBan := !st.BanSince.IsZero() && at.Sub(st.BanSince) >= r.Ban.Hold.D()
 		act := ActNone
 		switch {
-		case heldBan && r.Mode == ModeBan && u.Status != "DISABLED" && st.BannedAt.IsZero():
+		case heldBan && r.Mode == ModeBan && known && u.Status != "DISABLED" && st.BannedAt.IsZero():
 			act = ActBan
 			st.BannedAt = at
 		case heldNotify || heldBan:
 			due := st.NotifiedAt.IsZero() || at.Sub(st.NotifiedAt) >= r.Cooldown.D() || now >= 2*st.NotifiedNow || (heldBan && !st.NotifiedBan)
 			if due && st.BannedAt.IsZero() {
 				act = ActNotify
-				if heldBan {
+				// In ban mode a ban that cannot happen (unknown user, already
+				// disabled) is a plain notice, not "would be banned".
+				if heldBan && r.Mode != ModeBan {
 					act = ActWouldBan
 				}
 			}
@@ -402,7 +429,7 @@ func Evaluate(at time.Time, r Rule, tr *Tracker, users map[int64]User, fallback 
 			st.NotifiedBan = st.NotifiedBan || act == ActWouldBan || act == ActBan
 		}
 
-		keep := level != LevelOK || !st.BannedAt.IsZero() || (!st.NotifiedAt.IsZero() && at.Sub(st.NotifiedAt) < r.Cooldown.D())
+		keep := level != LevelOK || !st.NotifySince.IsZero() || !st.BanSince.IsZero() || !st.BannedAt.IsZero() || (!st.NotifiedAt.IsZero() && at.Sub(st.NotifiedAt) < r.Cooldown.D())
 		if keep {
 			next[id] = st
 		}
