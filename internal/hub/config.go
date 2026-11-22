@@ -17,6 +17,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/wh3r3ar3you/uptimeforge/internal/abuse"
 	"github.com/wh3r3ar3you/uptimeforge/internal/checks"
 	"github.com/wh3r3ar3you/uptimeforge/internal/xray"
 )
@@ -243,6 +244,10 @@ type Remnawave struct {
 	// node-deleted) and resumes them if the node comes back; servers and
 	// agent tokens are never touched.
 	Prune bool `yaml:"prune" json:"prune,omitempty"`
+	// Abuse counts the addresses a subscriber connects from at once and
+	// reports (or, in ban mode, disables) one far over its device limit.
+	// nil means on in notify mode with defaults.
+	Abuse *abuse.Rule `yaml:"abuse" json:"abuse,omitempty"`
 }
 
 var envRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
@@ -480,6 +485,9 @@ func (c *Config) normalize() error {
 	}
 	if c.Remnawave != nil {
 		if err := validateDrop(c.Remnawave.Drop); err != nil {
+			return err
+		}
+		if err := c.Remnawave.Abuse.Effective().Validate(); err != nil {
 			return err
 		}
 	}

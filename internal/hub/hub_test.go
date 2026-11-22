@@ -23,6 +23,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/wh3r3ar3you/uptimeforge/internal/agent"
+	"github.com/wh3r3ar3you/uptimeforge/internal/abuse"
 	"github.com/wh3r3ar3you/uptimeforge/internal/checks"
 	"github.com/wh3r3ar3you/uptimeforge/internal/geoip"
 	"github.com/wh3r3ar3you/uptimeforge/internal/model"
@@ -5263,5 +5264,27 @@ func TestAgentPublicAddress(t *testing.T) {
 				t.Fatalf("after the lookup %+v", n)
 			}
 		})
+	}
+}
+
+// remnawave.abuse is checked with the rest of the config: a ban threshold
+// below the notify one, or an unknown mode, is refused before it can act.
+func TestRemnawaveAbuseValidation(t *testing.T) {
+	base := func(r *abuse.Rule) *Config {
+		return &Config{DataDir: t.TempDir(), Probes: []ProbeConfig{{ID: "hub", Local: true}}, Remnawave: &Remnawave{URL: "https://panel", Token: "x", Abuse: r}}
+	}
+	if err := base(nil).normalize(); err != nil {
+		t.Fatalf("no abuse section: %v", err)
+	}
+	if err := base(&abuse.Rule{Mode: abuse.ModeBan, AllowUsers: []int64{30}}).normalize(); err != nil {
+		t.Fatalf("ban mode: %v", err)
+	}
+	for name, r := range map[string]*abuse.Rule{
+		"mode":                  {Mode: "kill"},
+		"must not be below the": {Notify: &abuse.Threshold{K: 6, N: 10}},
+	} {
+		if err := base(r).normalize(); err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }
